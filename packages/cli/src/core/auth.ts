@@ -1,5 +1,5 @@
 import { createClient } from './client'
-import { setToken, clearToken, getToken, getApiUrl, setApiUrl } from './config'
+import { getContext, type MemoHomeContext } from './context'
 
 export interface LoginParams {
   username: string
@@ -28,10 +28,12 @@ export interface ConfigInfo {
 }
 
 /**
- * Login to MemoHome API
+ * Login to MemoHome API (sync version for file storage)
+ * @param params - Login parameters
+ * @param context - Optional context
  */
-export async function login(params: LoginParams): Promise<LoginResult> {
-  const client = createClient()
+export async function login(params: LoginParams, context?: MemoHomeContext): Promise<LoginResult> {
+  const client = createClient(context)
   
   const response = await client.auth.login.post({
     username: params.username,
@@ -42,10 +44,18 @@ export async function login(params: LoginParams): Promise<LoginResult> {
     throw new Error(response.error.value)
   }
 
-  const data = response.data as { success?: boolean; data?: { token?: string; user?: { username: string; role: string } } } | null
+  const data = response.data as { success?: boolean; data?: { token?: string; user?: { username: string; role: string; id: string } } } | null
   
   if (data?.success && data?.data?.token && data?.data?.user) {
-    setToken(data.data.token)
+    const ctx = context || getContext()
+    const storage = ctx.storage
+    
+    // Set token (handle both sync and async)
+    const setResult = storage.setToken(data.data.token, ctx.currentUserId)
+    if (setResult instanceof Promise) {
+      await setResult
+    }
+    
     return {
       success: true,
       token: data.data.token,
@@ -58,28 +68,55 @@ export async function login(params: LoginParams): Promise<LoginResult> {
 
 /**
  * Logout current user
+ * @param context - Optional context
  */
-export function logout(): void {
-  clearToken()
+export function logout(context?: MemoHomeContext): void {
+  const ctx = context || getContext()
+  const storage = ctx.storage
+  
+  const result = storage.clearToken(ctx.currentUserId)
+  if (result instanceof Promise) {
+    throw new Error('logout does not support async storage. Use logoutAsync instead.')
+  }
 }
+
 
 /**
  * Check if user is logged in
+ * @param context - Optional context
  */
-export function isLoggedIn(): boolean {
-  return getToken() !== null
+export function isLoggedIn(context?: MemoHomeContext): boolean {
+  const ctx = context || getContext()
+  const storage = ctx.storage
+  
+  const token = storage.getToken(ctx.currentUserId)
+  
+  if (token instanceof Promise) {
+    throw new Error('isLoggedIn does not support async storage. Use isLoggedInAsync instead.')
+  }
+  
+  return token !== null
 }
 
 /**
  * Get current logged in user info
+ * @param context - Optional context
  */
-export async function getCurrentUser(): Promise<UserInfo> {
-  const token = getToken()
+export async function getCurrentUser(context?: MemoHomeContext): Promise<UserInfo> {
+  const ctx = context || getContext()
+  const storage = ctx.storage
+  
+  const token = storage.getToken(ctx.currentUserId)
+  
+  if (token instanceof Promise) {
+    throw new Error('getCurrentUser does not support async storage. Use getCurrentUserAsync instead.')
+  }
+  
   if (!token) {
     throw new Error('Not logged in')
   }
 
-  const client = createClient()
+  const client = createClient(context)
   const response = await client.auth.me.get()
 
   if (response.error) {
@@ -97,21 +134,40 @@ export async function getCurrentUser(): Promise<UserInfo> {
 
 /**
  * Get current API configuration
+ * @param context - Optional context
  */
-export function getConfig(): ConfigInfo {
+export function getConfig(context?: MemoHomeContext): ConfigInfo {
+  const ctx = context || getContext()
+  const storage = ctx.storage
+  
+  const apiUrl = storage.getApiUrl()
+  const token = storage.getToken(ctx.currentUserId)
+  
+  if (apiUrl instanceof Promise || token instanceof Promise) {
+    throw new Error('getConfig does not support async storage. Use getConfigAsync instead.')
+  }
+  
   return {
-    apiUrl: getApiUrl(),
-    loggedIn: isLoggedIn(),
+    apiUrl: apiUrl as string,
+    loggedIn: token !== null,
   }
 }
 
 /**
  * Set API URL
+ * @param url - API URL
+ * @param context - Optional context
  */
-export function setConfig(apiUrl: string): void {
-  setApiUrl(apiUrl)
+export function setConfig(url: string, context?: MemoHomeContext): void {
+  const ctx = context || getContext()
+  const storage = ctx.storage
+  
+  const result = storage.setApiUrl(url)
+  if (result instanceof Promise) {
+    throw new Error('setConfig does not support async storage. Use setConfigAsync instead.')
+  }
 }
 
-// Re-export config functions for convenience
-export { getToken, getApiUrl, setToken, clearToken, setApiUrl }
-
+// Re-export for backward compatibility
+export { getToken, getApiUrl } from './client'
+export { getContext, setContext, createContext } from './context'

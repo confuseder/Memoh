@@ -5,7 +5,7 @@ import ora from 'ora'
 import { table } from 'table'
 import * as modelCore from '../../core/model'
 import { formatError } from '../../utils'
-import { getApiUrl } from '../../core/config'
+import { getApiUrl } from '../../core/client'
 
 export function modelCommands(program: Command) {
   program

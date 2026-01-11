@@ -5,6 +5,19 @@
  * All functions are independent of CLI-specific UI concerns (no chalk, ora, inquirer, etc.)
  */
 
+// Context
+export {
+  getContext,
+  setContext,
+  createContext,
+  resetContext,
+  type MemoHomeContext,
+} from './context'
+
+// Storage
+export type { TokenStorage, Config } from './storage'
+export { FileTokenStorage } from './storage/'
+
 // Auth
 export {
   login,
@@ -13,11 +26,6 @@ export {
   getCurrentUser,
   getConfig,
   setConfig,
-  getToken,
-  getApiUrl,
-  setToken,
-  clearToken,
-  setApiUrl,
   type LoginParams,
   type LoginResult,
   type UserInfo,
@@ -49,7 +57,9 @@ export {
 // Agent
 export {
   chat,
+  chatAsync,
   chatStream,
+  chatStreamAsync,
   type ChatParams,
   type StreamEvent,
   type StreamCallback,
@@ -93,17 +103,10 @@ export {
   type PingResult,
 } from './debug'
 
-// Config
-export {
-  loadConfig,
-  saveConfig,
-  ensureConfigDir,
-  type Config,
-} from './config'
-
 // Client
 export {
   createClient,
   requireAuth,
+  getApiUrl,
+  getToken,
 } from './client'
-

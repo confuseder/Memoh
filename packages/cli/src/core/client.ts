@@ -1,29 +1,97 @@
-import { treaty } from '@elysiajs/eden'
-import { getApiUrl, getToken } from './config'
+import { getContext, type MemoHomeContext } from './context'
+import { createClient as createClientApi } from '@memohome/api/client'
 
-// Use dynamic import to avoid type errors
-export function createClient() {
-  const apiUrl = getApiUrl()
-  const token = getToken()
+/**
+ * Create API client
+ * @param context - Optional context, uses global context if not provided
+ */
+export function createClient(context?: MemoHomeContext) {
+  const ctx = context || getContext()
+  const storage = ctx.storage
+  
+  const apiUrlResult = typeof storage.getApiUrl === 'function' 
+    ? storage.getApiUrl() 
+    : (storage as unknown as Record<string, string>).apiUrl
+  
+  if (apiUrlResult instanceof Promise) {
+    throw new Error('createClient does not support async storage. Use createClientAsync instead.')
+  }
+  
+  const apiUrl = apiUrlResult as string
+  
+  const token = typeof storage.getToken === 'function'
+    ? storage.getToken(ctx.currentUserId)
+    : null
 
-  // Eden Treaty configuration
-  const client = treaty(apiUrl, {
-    headers: token ? {
-      'Authorization': `Bearer ${token}`,
-    } : undefined,
-  })
+  // Handle async token retrieval
+  if (token instanceof Promise) {
+    throw new Error('createClient does not support async token storage. Use createClientAsync instead.')
+  }
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  return client as any
+  const client = createClientApi(apiUrl, token ?? undefined)
+
+  return client
 }
 
-export function requireAuth(): string {
-  const token = getToken()
-  if (!token) {
-    throw new Error('Not logged in. Please use "memohome auth login" to login first')
+
+/**
+ * Require authentication
+ * Throws error if not authenticated
+ * @param context - Optional context, uses global context if not provided
+ */
+export function requireAuth(context?: MemoHomeContext): string {
+  const ctx = context || getContext()
+  const storage = ctx.storage
+  
+  const token = typeof storage.getToken === 'function'
+    ? storage.getToken(ctx.currentUserId)
+    : null
+
+  if (token instanceof Promise) {
+    throw new Error('requireAuth does not support async token storage. Use requireAuthAsync instead.')
   }
+
+  if (!token) {
+    throw new Error('Not logged in. Please login first')
+  }
+  
   return token
 }
 
-export { getApiUrl, getToken }
+/**
+ * Get API URL
+ * @param context - Optional context, uses global context if not provided
+ */
+export function getApiUrl(context?: MemoHomeContext): string {
+  const ctx = context || getContext()
+  const storage = ctx.storage
+  
+  const urlResult = typeof storage.getApiUrl === 'function'
+    ? storage.getApiUrl()
+    : (storage as unknown as Record<string, string>).apiUrl
 
+  if (urlResult instanceof Promise) {
+    throw new Error('getApiUrl does not support async storage. Use getApiUrlAsync instead.')
+  }
+
+  return urlResult as string
+}
+
+/**
+ * Get token
+ * @param context - Optional context, uses global context if not provided
+ */
+export function getToken(context?: MemoHomeContext): string | null {
+  const ctx = context || getContext()
+  const storage = ctx.storage
+  
+  const token = typeof storage.getToken === 'function'
+    ? storage.getToken(ctx.currentUserId)
+    : null
+
+  if (token instanceof Promise) {
+    throw new Error('getToken does not support async storage. Use getTokenAsync instead.')
+  }
+
+  return token
+}

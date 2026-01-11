@@ -1,4 +1,5 @@
 import { requireAuth, getToken, getApiUrl } from './client'
+import type { MemoHomeContext } from './context'
 
 export interface ChatParams {
   message: string
@@ -16,16 +17,48 @@ export interface StreamEvent {
 export type StreamCallback = (event: StreamEvent) => void | Promise<void>
 
 /**
- * Chat with AI Agent (streaming)
+ * Chat with AI Agent (streaming) - sync version
  */
 export async function chatStream(
   params: ChatParams,
+  onEvent: StreamCallback,
+  context?: MemoHomeContext
+): Promise<void> {
+  requireAuth(context)
+  const token = getToken(context)!
+  const apiUrl = getApiUrl(context)
+
+  await performStreamChat(apiUrl, token, params, onEvent)
+}
+
+/**
+ * Chat with AI Agent (streaming) - async version for Redis storage
+ */
+export async function chatStreamAsync(
+  params: ChatParams,
+  onEvent: StreamCallback,
+  context?: MemoHomeContext
+): Promise<void> {
+  requireAuth(context)
+  const token = getToken(context)!
+  const apiUrl = getApiUrl(context)
+
+  if (!token) {
+    throw new Error('Not authenticated')
+  }
+
+  await performStreamChat(apiUrl, token, params, onEvent)
+}
+
+/**
+ * Internal function to perform streaming chat
+ */
+async function performStreamChat(
+  apiUrl: string,
+  token: string,
+  params: ChatParams,
   onEvent: StreamCallback
 ): Promise<void> {
-  requireAuth()
-  const token = getToken()!
-  const apiUrl = getApiUrl()
-
   const response = await fetch(`${apiUrl}/agent/stream`, {
     method: 'POST',
     headers: {
@@ -91,9 +124,9 @@ export async function chatStream(
 }
 
 /**
- * Chat with AI Agent (non-streaming, collect full response)
+ * Chat with AI Agent (non-streaming, collect full response) - sync version
  */
-export async function chat(params: ChatParams): Promise<string> {
+export async function chat(params: ChatParams, context?: MemoHomeContext): Promise<string> {
   let fullResponse = ''
   
   await chatStream(params, async (event) => {
@@ -102,8 +135,24 @@ export async function chat(params: ChatParams): Promise<string> {
     } else if (event.type === 'error') {
       throw new Error(event.error)
     }
-  })
+  }, context)
   
   return fullResponse
 }
 
+/**
+ * Chat with AI Agent (non-streaming, collect full response) - async version
+ */
+export async function chatAsync(params: ChatParams, context?: MemoHomeContext): Promise<string> {
+  let fullResponse = ''
+  
+  await chatStreamAsync(params, async (event) => {
+    if (event.type === 'text-delta' && event.text) {
+      fullResponse += event.text
+    } else if (event.type === 'error') {
+      throw new Error(event.error)
+    }
+  }, context)
+  
+  return fullResponse
+}
