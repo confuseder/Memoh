@@ -30,7 +30,7 @@
         </SidebarHeader>
         <SidebarContent>
           <SidebarGroup>
-            <SidebarGroupLabel class="text-base">
+            <SidebarGroupLabel>
               对话操作
             </SidebarGroupLabel>
             <SidebarGroupContent>
@@ -39,17 +39,15 @@
                   v-for="sidebarItem in sidebarInfo"
                   :key="sidebarItem.title"
                 >
-                  <SidebarMenuButton        
-                    as-child
-                  >
-                    <section class="flex">
+                  <CollapsibleTrigger as-child>
+                    <SidebarMenuButton>
                       <svg-icon
                         type="mdi"
                         :path="sidebarItem.icon"
                       />
                       <span>{{ sidebarItem.title }}</span>
-                    </section>
-                  </SidebarMenuButton>
+                    </SidebarMenuButton>
+                  </CollapsibleTrigger>
                 </SidebarMenuItem>
               </SidebarMenu>
             </SidebarGroupContent>
@@ -74,11 +72,12 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
   SidebarProvider,
-  SidebarRail,  
+  SidebarRail, 
+  
 } from '@memoh/ui'
 import { reactive, inject } from 'vue'
 import SvgIcon from '@jamescoyle/vue-icon'
-import { mdiCogOutline, mdiChatOutline, mdiCogBox, mdiListBox } from '@mdi/js'
+import { mdiRobot, mdiChatOutline, mdiCogBox, mdiListBox } from '@mdi/js'
 
 
 const open=inject('sideBarIsOpen')
@@ -90,7 +89,7 @@ const sidebarInfo = reactive([{
 }, {
   title: '模型配置',
   path: '/',
-  icon: mdiCogOutline
+  icon: mdiRobot
   }, {
   title: '环境设置',
   path: '/',
