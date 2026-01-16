@@ -11,15 +11,25 @@
         />
         <Breadcrumb>
           <BreadcrumbList>
-            <!-- <BreadcrumbItem class="hidden md:block">
-              <BreadcrumbLink href="#">
-                Building Your Application
-              </BreadcrumbLink>
-            </BreadcrumbItem> -->
-            <BreadcrumbSeparator class="hidden md:block" />
-            <BreadcrumbItem>
-              <BreadcrumbPage>对话</BreadcrumbPage>
-            </BreadcrumbItem>
+            <template
+              v-for="(breadcrumbItem,index) in curBreadcrumb"
+              :key="breadcrumbItem"
+            >
+              <template v-if="(index+1)!==curBreadcrumb.length">
+                <BreadcrumbItem class="hidden md:block">
+                  <BreadcrumbLink :href="breadcrumbItem.path">
+                    {{ breadcrumbItem.breadcrumb }}
+                  </BreadcrumbLink>
+                </BreadcrumbItem>
+                <BreadcrumbSeparator />
+              </template>
+             
+              <BreadcrumbItem v-else>
+                <BreadcrumbPage>
+                  {{ breadcrumbItem.breadcrumb }}
+                </BreadcrumbPage>
+              </BreadcrumbItem>
+            </template>
           </BreadcrumbList>
         </Breadcrumb>
       </div>
@@ -35,7 +45,6 @@
 </template>
 
 <script setup lang="ts">
-import { inject } from 'vue'
 import {
   SidebarTrigger, SidebarInset, Breadcrumb,
   BreadcrumbItem,
@@ -45,6 +54,15 @@ import {
   BreadcrumbSeparator,
   Separator
 } from '@memoh/ui'
+import {useRoute} from 'vue-router'
+import { computed } from 'vue'
+const route = useRoute()
 
-const open = inject('sideBarIsOpen')
+const curBreadcrumb = computed(() => { 
+  return route.matched.map(routeItem => ({
+    path: routeItem.path,
+    breadcrumb: routeItem.meta['breadcrumb']
+  })) 
+})
+
 </script>

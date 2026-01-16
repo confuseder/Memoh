@@ -10,7 +10,7 @@
       />
       <RobotChat
         v-if="chatItem.action === 'robot'"
-        :robot-say="chatItem as robot"
+        :robot-say="chatItem"
       />
     </template>
   </div>
@@ -23,7 +23,7 @@ import { reactive } from 'vue'
 import type { user, robot } from '@memoh/shared'
 
 // 模拟一下数据
-const chatList = reactive<(((user | robot) & { action: 'robot' | 'user' }))[]>([{
+const chatList = reactive<(((user | robot)))[]>([{
   description: 'fjiwofwofjewifwe', time: new Date, id: 2, action: 'user'
 }, {
   description: 'fjiwofwofjefwfewfwifwe', time: new Date, id: 1000, action: 'robot', type: 'Openai Gpt5'

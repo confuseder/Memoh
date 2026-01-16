@@ -1,18 +1,18 @@
 <template>
   <aside class="[&_[data-state=collapsed]_.title-container]:hidden">
-    <Sidebar
-      collapsible="icon"
-    >
+    <Sidebar collapsible="icon">
       <SidebarHeader>
         <SidebarMenu>
-          <SidebarMenuItem>        
+          <SidebarMenuItem>
             <img
               src="../../../public/logo.png"
               width="80"
               class="m-auto"
               alt="logo.png"
             >
-            <h4 class="scroll-m-20 text-xl font-semibold tracking-tight text-center text-muted-foreground title-container">
+            <h4
+              class="scroll-m-20 text-xl font-semibold tracking-tight text-center text-muted-foreground title-container"
+            >
               Memoh
             </h4>
           </SidebarMenuItem>
@@ -32,7 +32,10 @@
               >
                 <SidebarMenuItem>
                   <CollapsibleTrigger as-child>
-                    <SidebarMenuButton :tooltip="sidebarItem.title">
+                    <SidebarMenuButton
+                      :tooltip="sidebarItem.title"
+                      @click="router.push({ name: sidebarItem.name })"
+                    >
                       <svg-icon
                         type="mdi"
                         :path="sidebarItem.icon"
@@ -46,7 +49,7 @@
           </SidebarGroupContent>
         </SidebarGroup>
       </SidebarContent>
-     
+
       <SidebarRail />
     </Sidebar>
   </aside>
@@ -58,42 +61,46 @@ import {
   SidebarGroup,
   SidebarGroupContent,
   SidebarGroupLabel,
-  SidebarHeader,  
+  SidebarHeader,
   SidebarMenu,
   SidebarMenuButton,
-  SidebarMenuItem,  
-  SidebarRail, 
+  SidebarMenuItem,
+  SidebarRail,
   CollapsibleTrigger,
   Collapsible
-  
+
 } from '@memoh/ui'
-import { reactive, inject } from 'vue'
+import { reactive } from 'vue'
 import SvgIcon from '@jamescoyle/vue-icon'
-import { mdiRobot, mdiChatOutline, mdiCogBox, mdiListBox, mdiHome } from '@mdi/js'
+import { mdiRobot, mdiChatOutline, mdiCogBox, mdiListBox, mdiHome, mdiBookArrowDown } from '@mdi/js'
+import { useRouter } from 'vue-router'
 
-
-const open=inject('sideBarIsOpen')
+const router = useRouter()
 
 const sidebarInfo = reactive([{
   title: '创建对话',
-  path: '/',
+  name: 'chat',
   icon: mdiChatOutline
 }, {
   title: '主页',
-  path: '/',
+  name: 'home',
   icon: mdiHome
 },
-  {
+{
   title: '模型配置',
-  path: '/',
+  name: 'models',
   icon: mdiRobot
-  }, {
-  title: '环境设置',
-  path: '/',
+}, {
+  title: '设置',
+  name: 'settings',
   icon: mdiCogBox
-  }, {
-  title: '平台',
-  path: '/',
+}, {
+  title: 'MCP',
+  name: 'mcp',
   icon: mdiListBox
+}, {
+  title: '平台',
+  name: 'platform',
+  icon: mdiBookArrowDown
 }])
 </script>

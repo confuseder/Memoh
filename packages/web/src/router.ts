@@ -14,10 +14,52 @@ const routes = [
     name: 'Main',
     component: () => import('@/pages/mainSection/index.vue'),
     path: '/main',
-    redirect:'/main/chat',
+    redirect: '/main/chat',
+    meta: {
+      breadcrumb: '主菜单'
+    },
     children: [{
+      name: 'chat',
       path: 'chat',
-      component: () => import('@/pages/chat/index.vue')
+      component: () => import('@/pages/chat/index.vue'),
+      meta: {
+        breadcrumb: '对话'
+      }
+    }, {
+      name: 'home',
+      path: 'home',
+      component: () => import('@/pages/home/index.vue'),
+      meta: {
+        breadcrumb: '主页'
+      }
+    }, {
+      name: 'models',
+      path: 'models',
+      component: () => import('@/pages/models/index.vue'),
+      meta: {
+        breadcrumb: '模型管理'
+      }
+    }, {
+      name: 'settings',
+      path: 'settings',
+      component: () => import('@/pages/settings/index.vue'),
+      meta: {
+        breadcrumb: '设置'
+      }
+    }, {
+      name: 'mcp',
+      path: 'mcp',
+      component: () => import('@/pages/mcp/index.vue'),
+      meta: {
+        breadcrumb: 'MCP'
+      }
+    }, {
+      name: 'platform',
+      path: 'platform',
+      component: () => import('@/pages/platform/index.vue'),
+      meta: {
+        breadcrumb: '平台'
+      }
     }]
   }
 
