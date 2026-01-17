@@ -179,7 +179,8 @@ export function useContainer(
 
     buildExecCommand(command: string[]): string[] {
       // nerdctl exec with -i to keep STDIN open for MCP servers
-      return [...client.nerdctlCommand, 'exec', '-i', containerName, ...command]
+      const socket = options?.socket ? ['--address', options.socket] : []
+      return [...client.nerdctlCommand, ...socket, 'exec', '-i', containerName, ...command]
     }
   }
 }

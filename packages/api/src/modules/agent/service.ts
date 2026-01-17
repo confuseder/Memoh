@@ -49,6 +49,7 @@ export async function createAgent(params: CreateAgentStreamParams) {
   // Ensure container is running before creating agent
   const container = useContainer(containerInfo.containerName, {
     namespace: containerInfo.namespace,
+    socket: process.env.CONTAINERD_SOCKET,
   })
   
   // Check and start container if not running

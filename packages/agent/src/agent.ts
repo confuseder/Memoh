@@ -115,6 +115,7 @@ export const createAgent = (params: AgentParams) => {
       model: gateway,
       system: getSystemPrompt(),
       messages,
+      stopWhen: stepCountIs(50),
       tools: await getTools(),
       onFinish: async () => {
         await onComplete()
@@ -142,7 +143,7 @@ export const createAgent = (params: AgentParams) => {
             system: getSystemPrompt(),
           }
         },
-        stopWhen: stepCountIs(10),
+        stopWhen: stepCountIs(50),
         messages,
         tools: await getTools(),
         onFinish: async () => {

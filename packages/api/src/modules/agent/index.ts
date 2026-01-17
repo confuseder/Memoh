@@ -58,15 +58,21 @@ export const agentModule = new Elysia({
           try {
             const encoder = new TextEncoder()
             
-            console.log('📨 Starting agent stream for message:', body.message.substring(0, 50))
+            console.log('📨 [API] Starting agent stream for message:', body.message.substring(0, 50))
+            console.log('🔗 [API] Starting event loop...')
             
+            let eventCount = 0
             // Send events as they come
             for await (const event of agent.ask(body.message)) {
+              eventCount++
+              console.log(`📤 [API] Received event #${eventCount}, type:`, event.type)
               const data = JSON.stringify(event)
+              console.log(`📤 [API] Enqueueing event #${eventCount}...`)
               controller.enqueue(encoder.encode(`data: ${data}\n\n`))
+              console.log(`✅ [API] Event #${eventCount} enqueued successfully`)
             }
 
-            console.log('✅ Agent stream completed successfully')
+            console.log(`✅ [API] Agent stream completed successfully (${eventCount} events)`)
             
             // Send done event
             controller.enqueue(encoder.encode('data: [DONE]\n\n'))
