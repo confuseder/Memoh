@@ -9,6 +9,8 @@
     "start": "vite preview"
   },
   "dependencies": {
+    "@jamescoyle/vue-icon": "^0.1.2",
+    "@mdi/js": "^7.4.47",
     "@memoh/shared": "workspace:*",
     "@memoh/ui": "workspace:*",
     "@tailwindcss/vite": "^4.1.18",

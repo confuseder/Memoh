@@ -1,9 +1,14 @@
 {
   "editor.insertSpaces": true,
   "editor.detectIndentation": false,
-  
+  "editor.formatOnSave": false,
+  "editor.codeActionsOnSave": {
+    "source.fixAll.eslint": "explicit",
+    "source.organizeImports": "never"
+  },
+
   "editor.tabSize": 2,
-  
+
   "[typescript]": {
     "editor.tabSize": 2,
     "editor.insertSpaces": true
@@ -24,10 +29,9 @@
     "editor.tabSize": 2,
     "editor.insertSpaces": true
   },
-  
+
   "[python]": {
     "editor.tabSize": 4,
     "editor.insertSpaces": true
   }
 }
-
