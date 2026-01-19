@@ -14,7 +14,28 @@
               使用不用厂商的大模型
             </DialogDescription>
           </DialogHeader>
-          <div class="grid ">
+          <div>
+            <FormField
+              v-slot="{ componentField }"
+              name="modelId"
+            >
+              <FormItem>
+                <FormLabel class="mb-2">
+                  Model Name
+                </FormLabel>
+                <FormControl>
+                  <Input
+                    type="text"
+                    placeholder="请输入Model Name"
+                    v-bind="componentField"
+                    autocomplete="modelId"
+                  />
+                </FormControl>
+                <blockquote class="h-5">
+                  <FormMessage />
+                </blockquote>
+              </FormItem>
+            </FormField>
             <FormField
               v-slot="{ componentField }"
               name="baseUrl"
@@ -24,7 +45,7 @@
                   Base Url
                 </FormLabel>
                 <FormControl>
-                  <Input                   
+                  <Input
                     type="text"
                     placeholder="请输入Base Url"
                     v-bind="componentField"
@@ -45,7 +66,7 @@
                   Api Key
                 </FormLabel>
                 <FormControl>
-                  <Input                   
+                  <Input
                     placeholder="请输入Api Key"
                     autocomplete="apiKey"
                     v-bind="componentField"
@@ -65,11 +86,24 @@
                   Client Type
                 </FormLabel>
                 <FormControl>
-                  <Input                    
-                    placeholder="请输入Api Key"
-                    autocomplete="clientType"
-                    v-bind="componentField"
-                  />
+                  <Select v-bind="componentField">
+                    <SelectTrigger class="w-full">
+                      <SelectValue placeholder="请选择Client Type" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectGroup>
+                        <SelectItem value="OpenAI">
+                          OpenAI
+                        </SelectItem>
+                        <SelectItem value="Anthropic">
+                          Anthropic
+                        </SelectItem>
+                        <SelectItem value="Google">
+                          Google
+                        </SelectItem>
+                      </SelectGroup>
+                    </SelectContent>
+                  </Select>
                 </FormControl>
                 <blockquote class="h-5">
                   <FormMessage />
@@ -82,7 +116,7 @@
             >
               <FormItem>
                 <FormLabel class="mb-2">
-                  Name
+                  Display Name
                 </FormLabel>
                 <FormControl>
                   <Input
@@ -106,20 +140,20 @@
                 </FormLabel>
                 <FormControl>
                   <Select v-bind="componentField">
-                    <SelectTrigger
-                      class="w-full"
-                    >
-                      <SelectValue
-                        placeholder="Select a fruit"
-                      />
+                    <SelectTrigger class="w-full">
+                      <SelectValue placeholder="请选择Role" />
                     </SelectTrigger>
                     <SelectContent>
                       <SelectGroup>
                         <SelectItem
                           value="chat"
-                          select
                         >
                           Chat
+                        </SelectItem>
+                        <SelectItem
+                          value="embedding"
+                        >
+                          embedding
                         </SelectItem>
                       </SelectGroup>
                     </SelectContent>
@@ -164,7 +198,7 @@ import {
   Select,
   SelectContent,
   SelectGroup,
-  SelectItem, 
+  SelectItem,
   SelectTrigger,
   SelectValue,
   FormItem,
@@ -176,6 +210,8 @@ import { ref } from 'vue'
 import { toTypedSchema } from '@vee-validate/zod'
 import z from 'zod'
 import request from '@/utils/request'
+import { useMutation,useQueryCache } from '@pinia/colada'
+
 
 const formSchema = toTypedSchema(z.object({
   baseUrl: z.string().min(1),
@@ -186,23 +222,24 @@ const formSchema = toTypedSchema(z.object({
 }))
 
 const form = useForm({
-  validationSchema:formSchema
-})
-const addModel=form.handleSubmit(async (modelInfo) => {
-  try {
-    await request({
-      url: '/model',
-      data: {
-        ...modelInfo
-      }
-    })  
-    open.value = false
-  } catch (err) {
-    return err
-  }
-  
- 
+  validationSchema: formSchema
 })
 
-const open=ref(false)
+const queryCache=useQueryCache()
+const { mutate: createModel } = useMutation({
+  mutation: (modelInfo: Parameters<(Parameters<typeof form.handleSubmit>)[0]>[0]) => request({
+    url: '/model',
+    data: {
+      ...modelInfo,
+      modelId:'fwoi0fjwfiwefwjfiowefoi'
+    },
+    method:'post'
+  }),
+  onSettled: () => queryCache.invalidateQueries({ key: ['models'], exact: true })
+})
+const addModel = form.handleSubmit(async (modelInfo) => {
+  createModel(modelInfo)
+})
+
+const open = ref(false)
 </script>
