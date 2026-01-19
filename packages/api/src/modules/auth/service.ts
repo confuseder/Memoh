@@ -22,9 +22,11 @@ export const validateUser = async (username: string, password: string) => {
         .where(eq(users.username, rootUser))
 
       userId = existingUser?.id
+   
       if (!existingUser) {
         // 为 root 用户创建数据库记录
         // 使用占位符密码哈希，因为实际密码在环境变量中
+       
         const [newUser] = await db
           .insert(users)
           .values({

@@ -23,7 +23,7 @@ export const userModule = new Elysia({
   .use(adminMiddleware)
   // Get all users
   .get('/', async ({ query }) => {
-    try {
+    try {    
       const page = parseInt(query.page as string) || 1
       const limit = parseInt(query.limit as string) || 10
       const sortBy = query.sortBy as string || 'createdAt'
