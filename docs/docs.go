@@ -61,6 +61,52 @@ const docTemplate = `{
                 }
             }
         },
+        "/embeddings": {
+            "post": {
+                "description": "Create text or multimodal embeddings",
+                "tags": [
+                    "embeddings"
+                ],
+                "summary": "Create embeddings",
+                "parameters": [
+                    {
+                        "description": "Embeddings request",
+                        "name": "payload",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/handlers.EmbeddingsRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.EmbeddingsResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    },
+                    "501": {
+                        "description": "Not Implemented",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.EmbeddingsResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/fs/apply_patch": {
             "post": {
                 "description": "Apply a unified diff patch to a file under the user data mount",
@@ -347,6 +393,46 @@ const docTemplate = `{
                         "description": "OK",
                         "schema": {
                             "$ref": "#/definitions/memory.SearchResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/memory/embed": {
+            "post": {
+                "description": "Embed text or multimodal input and upsert into memory store",
+                "tags": [
+                    "memory"
+                ],
+                "summary": "Embed and upsert memory",
+                "parameters": [
+                    {
+                        "description": "Embed upsert request",
+                        "name": "payload",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/memory.EmbedUpsertRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/memory.EmbedUpsertResponse"
                         }
                     },
                     "400": {
@@ -1044,6 +1130,83 @@ const docTemplate = `{
                 }
             }
         },
+        "handlers.EmbeddingsInput": {
+            "type": "object",
+            "properties": {
+                "image_url": {
+                    "type": "string"
+                },
+                "text": {
+                    "type": "string"
+                },
+                "video_url": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.EmbeddingsRequest": {
+            "type": "object",
+            "properties": {
+                "dimensions": {
+                    "type": "integer"
+                },
+                "input": {
+                    "$ref": "#/definitions/handlers.EmbeddingsInput"
+                },
+                "model": {
+                    "type": "string"
+                },
+                "provider": {
+                    "type": "string"
+                },
+                "type": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.EmbeddingsResponse": {
+            "type": "object",
+            "properties": {
+                "dimensions": {
+                    "type": "integer"
+                },
+                "embedding": {
+                    "type": "array",
+                    "items": {
+                        "type": "number"
+                    }
+                },
+                "message": {
+                    "type": "string"
+                },
+                "model": {
+                    "type": "string"
+                },
+                "provider": {
+                    "type": "string"
+                },
+                "type": {
+                    "type": "string"
+                },
+                "usage": {
+                    "$ref": "#/definitions/handlers.EmbeddingsUsage"
+                }
+            }
+        },
+        "handlers.EmbeddingsUsage": {
+            "type": "object",
+            "properties": {
+                "image_tokens": {
+                    "type": "integer"
+                },
+                "input_tokens": {
+                    "type": "integer"
+                },
+                "video_tokens": {
+                    "type": "integer"
+                }
+            }
+        },
         "handlers.ErrorResponse": {
             "type": "object",
             "properties": {
@@ -1216,6 +1379,74 @@ const docTemplate = `{
                 }
             }
         },
+        "memory.EmbedInput": {
+            "type": "object",
+            "properties": {
+                "image_url": {
+                    "type": "string"
+                },
+                "text": {
+                    "type": "string"
+                },
+                "video_url": {
+                    "type": "string"
+                }
+            }
+        },
+        "memory.EmbedUpsertRequest": {
+            "type": "object",
+            "properties": {
+                "agent_id": {
+                    "type": "string"
+                },
+                "filters": {
+                    "type": "object",
+                    "additionalProperties": true
+                },
+                "input": {
+                    "$ref": "#/definitions/memory.EmbedInput"
+                },
+                "metadata": {
+                    "type": "object",
+                    "additionalProperties": true
+                },
+                "model": {
+                    "type": "string"
+                },
+                "provider": {
+                    "type": "string"
+                },
+                "run_id": {
+                    "type": "string"
+                },
+                "source": {
+                    "type": "string"
+                },
+                "type": {
+                    "type": "string"
+                },
+                "user_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "memory.EmbedUpsertResponse": {
+            "type": "object",
+            "properties": {
+                "dimensions": {
+                    "type": "integer"
+                },
+                "item": {
+                    "$ref": "#/definitions/memory.MemoryItem"
+                },
+                "model": {
+                    "type": "string"
+                },
+                "provider": {
+                    "type": "string"
+                }
+            }
+        },
         "memory.MemoryItem": {
             "type": "object",
             "properties": {
@@ -1282,6 +1513,12 @@ const docTemplate = `{
                 "run_id": {
                     "type": "string"
                 },
+                "sources": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
                 "user_id": {
                     "type": "string"
                 }
@@ -1316,17 +1553,14 @@ const docTemplate = `{
         "models.AddRequest": {
             "type": "object",
             "properties": {
-                "api_key": {
-                    "type": "string"
-                },
-                "base_url": {
-                    "type": "string"
-                },
-                "client_type": {
-                    "$ref": "#/definitions/models.ClientType"
-                },
                 "dimensions": {
                     "type": "integer"
+                },
+                "is_multimodal": {
+                    "type": "boolean"
+                },
+                "llm_provider_id": {
+                    "type": "string"
                 },
                 "model_id": {
                     "type": "string"
@@ -1335,7 +1569,7 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "type": {
-                    "type": "string"
+                    "$ref": "#/definitions/models.ModelType"
                 }
             }
         },
@@ -1350,19 +1584,6 @@ const docTemplate = `{
                 }
             }
         },
-        "models.ClientType": {
-            "type": "string",
-            "enum": [
-                "openai",
-                "anthropic",
-                "google"
-            ],
-            "x-enum-varnames": [
-                "ClientTypeOpenAI",
-                "ClientTypeAnthropic",
-                "ClientTypeGoogle"
-            ]
-        },
         "models.CountResponse": {
             "type": "object",
             "properties": {
@@ -1374,17 +1595,14 @@ const docTemplate = `{
         "models.GetResponse": {
             "type": "object",
             "properties": {
-                "api_key": {
-                    "type": "string"
-                },
-                "base_url": {
-                    "type": "string"
-                },
-                "client_type": {
-                    "$ref": "#/definitions/models.ClientType"
-                },
                 "dimensions": {
                     "type": "integer"
+                },
+                "is_multimodal": {
+                    "type": "boolean"
+                },
+                "llm_provider_id": {
+                    "type": "string"
                 },
                 "model_id": {
                     "type": "string"
@@ -1393,24 +1611,32 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "type": {
-                    "type": "string"
+                    "$ref": "#/definitions/models.ModelType"
                 }
             }
+        },
+        "models.ModelType": {
+            "type": "string",
+            "enum": [
+                "chat",
+                "embedding"
+            ],
+            "x-enum-varnames": [
+                "ModelTypeChat",
+                "ModelTypeEmbedding"
+            ]
         },
         "models.UpdateRequest": {
             "type": "object",
             "properties": {
-                "api_key": {
-                    "type": "string"
-                },
-                "base_url": {
-                    "type": "string"
-                },
-                "client_type": {
-                    "$ref": "#/definitions/models.ClientType"
-                },
                 "dimensions": {
                     "type": "integer"
+                },
+                "is_multimodal": {
+                    "type": "boolean"
+                },
+                "llm_provider_id": {
+                    "type": "string"
                 },
                 "model_id": {
                     "type": "string"
@@ -1419,7 +1645,7 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "type": {
-                    "type": "string"
+                    "$ref": "#/definitions/models.ModelType"
                 }
             }
         }

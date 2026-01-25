@@ -55,25 +55,50 @@ CREATE TABLE IF NOT EXISTS snapshots (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+CREATE INDEX IF NOT EXISTS idx_snapshots_container_id ON snapshots(container_id);
+CREATE INDEX IF NOT EXISTS idx_snapshots_parent_id ON snapshots(parent_snapshot_id);
+
+CREATE TABLE IF NOT EXISTS llm_providers (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  name TEXT NOT NULL,
+  client_type TEXT NOT NULL,
+  base_url TEXT NOT NULL,
+  api_key TEXT NOT NULL,
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT llm_providers_name_unique UNIQUE (name),
+  CONSTRAINT llm_providers_client_type_check CHECK (client_type IN ('openai', 'anthropic', 'google', 'bedrock', 'ollama', 'azure', 'dashscope', 'other'))
+);
+
 CREATE TABLE IF NOT EXISTS models (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   model_id TEXT NOT NULL,
   name TEXT,
-  base_url TEXT NOT NULL,
-  api_key TEXT NOT NULL,
-  client_type TEXT NOT NULL,
+  llm_provider_id UUID NOT NULL REFERENCES llm_providers(id) ON DELETE CASCADE,
   dimensions INTEGER,
+  is_multimodal BOOLEAN NOT NULL DEFAULT false,
   type TEXT NOT NULL DEFAULT 'chat',
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   CONSTRAINT models_model_id_unique UNIQUE (model_id),
   CONSTRAINT models_type_check CHECK (type IN ('chat', 'embedding')),
-  CONSTRAINT models_client_type_check CHECK (client_type IN ('openai', 'anthropic', 'google')),
   CONSTRAINT models_dimensions_check CHECK (type != 'embedding' OR dimensions IS NOT NULL)
 );
 
-CREATE INDEX IF NOT EXISTS idx_snapshots_container_id ON snapshots(container_id);
-CREATE INDEX IF NOT EXISTS idx_snapshots_parent_id ON snapshots(parent_snapshot_id);
+CREATE TABLE IF NOT EXISTS model_variants (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  model_uuid UUID NOT NULL REFERENCES models(id) ON DELETE CASCADE,
+  variant_id TEXT NOT NULL,
+  weight INTEGER NOT NULL,
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_model_variants_model_uuid ON model_variants(model_uuid);
+CREATE INDEX IF NOT EXISTS idx_model_variants_variant_id ON model_variants(variant_id);
+
 
 CREATE TABLE IF NOT EXISTS container_versions (
   id TEXT PRIMARY KEY,

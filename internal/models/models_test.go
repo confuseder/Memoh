@@ -18,9 +18,7 @@ func ExampleService_Create() {
 	// req := models.AddRequest{
 	// 	ModelID:    "gpt-4",
 	// 	Name:       "GPT-4",
-	// 	BaseURL:    "https://api.openai.com/v1",
-	// 	APIKey:     "sk-...",
-	// 	ClientType: models.ClientTypeOpenAI,
+	// 	LlmProviderID: "11111111-1111-1111-1111-111111111111",
 	// 	Type:       models.ModelTypeChat,
 	// }
 	
@@ -77,9 +75,7 @@ func ExampleService_UpdateByModelID() {
 	// req := models.UpdateRequest{
 	// 	ModelID:    "gpt-4",
 	// 	Name:       "GPT-4 Turbo",
-	// 	BaseURL:    "https://api.openai.com/v1",
-	// 	APIKey:     "sk-...",
-	// 	ClientType: models.ClientTypeOpenAI,
+	// 	LlmProviderID: "11111111-1111-1111-1111-111111111111",
 	// 	Type:       models.ModelTypeChat,
 	// }
 	
@@ -111,89 +107,65 @@ func TestModel_Validate(t *testing.T) {
 		{
 			name: "valid chat model",
 			model: models.Model{
-				ModelID:    "gpt-4",
-				Name:       "GPT-4",
-				BaseURL:    "https://api.openai.com/v1",
-				APIKey:     "sk-test",
-				ClientType: models.ClientTypeOpenAI,
-				Type:       models.ModelTypeChat,
+				ModelID:       "gpt-4",
+				Name:          "GPT-4",
+				LlmProviderID: "11111111-1111-1111-1111-111111111111",
+				Type:          models.ModelTypeChat,
 			},
 			wantErr: false,
 		},
 		{
 			name: "valid embedding model",
 			model: models.Model{
-				ModelID:    "text-embedding-ada-002",
-				Name:       "Ada Embeddings",
-				BaseURL:    "https://api.openai.com/v1",
-				APIKey:     "sk-test",
-				ClientType: models.ClientTypeOpenAI,
-				Type:       models.ModelTypeEmbedding,
-				Dimensions: 1536,
+				ModelID:       "text-embedding-ada-002",
+				Name:          "Ada Embeddings",
+				LlmProviderID: "11111111-1111-1111-1111-111111111111",
+				Type:          models.ModelTypeEmbedding,
+				Dimensions:    1536,
 			},
 			wantErr: false,
 		},
 		{
 			name: "missing model_id",
 			model: models.Model{
-				BaseURL:    "https://api.openai.com/v1",
-				APIKey:     "sk-test",
-				ClientType: models.ClientTypeOpenAI,
-				Type:       models.ModelTypeChat,
+				LlmProviderID: "11111111-1111-1111-1111-111111111111",
+				Type:          models.ModelTypeChat,
 			},
 			wantErr: true,
 		},
 		{
-			name: "missing base_url",
+			name: "missing llm_provider_id",
 			model: models.Model{
-				ModelID:    "gpt-4",
-				APIKey:     "sk-test",
-				ClientType: models.ClientTypeOpenAI,
-				Type:       models.ModelTypeChat,
+				ModelID: "gpt-4",
+				Type:    models.ModelTypeChat,
 			},
 			wantErr: true,
 		},
 		{
-			name: "missing api_key",
+			name: "invalid llm_provider_id",
 			model: models.Model{
-				ModelID:    "gpt-4",
-				BaseURL:    "https://api.openai.com/v1",
-				ClientType: models.ClientTypeOpenAI,
-				Type:       models.ModelTypeChat,
-			},
-			wantErr: true,
-		},
-		{
-			name: "invalid client type",
-			model: models.Model{
-				ModelID:    "gpt-4",
-				BaseURL:    "https://api.openai.com/v1",
-				APIKey:     "sk-test",
-				ClientType: "invalid",
-				Type:       models.ModelTypeChat,
+				ModelID:       "gpt-4",
+				LlmProviderID: "not-a-uuid",
+				Type:          models.ModelTypeChat,
 			},
 			wantErr: true,
 		},
 		{
 			name: "invalid model type",
 			model: models.Model{
-				ModelID:    "gpt-4",
-				BaseURL:    "https://api.openai.com/v1",
-				APIKey:     "sk-test",
-				ClientType: models.ClientTypeOpenAI,
-				Type:       "invalid",
+				ModelID:       "gpt-4",
+				LlmProviderID: "11111111-1111-1111-1111-111111111111",
+				Type:          "invalid",
 			},
 			wantErr: true,
 		},
 		{
 			name: "embedding model missing dimensions",
 			model: models.Model{
-				ModelID:    "text-embedding-ada-002",
-				BaseURL:    "https://api.openai.com/v1",
-				APIKey:     "sk-test",
-				ClientType: models.ClientTypeOpenAI,
-				Type:       models.ModelTypeEmbedding,
-				Dimensions: 0,
+				ModelID:       "text-embedding-ada-002",
+				LlmProviderID: "11111111-1111-1111-1111-111111111111",
+				Type:          models.ModelTypeEmbedding,
+				Dimensions:    0,
 			},
 			wantErr: true,
 		},
@@ -221,6 +193,11 @@ func TestModelTypes(t *testing.T) {
 		assert.Equal(t, models.ClientType("openai"), models.ClientTypeOpenAI)
 		assert.Equal(t, models.ClientType("anthropic"), models.ClientTypeAnthropic)
 		assert.Equal(t, models.ClientType("google"), models.ClientTypeGoogle)
+		assert.Equal(t, models.ClientType("bedrock"), models.ClientTypeBedrock)
+		assert.Equal(t, models.ClientType("ollama"), models.ClientTypeOllama)
+		assert.Equal(t, models.ClientType("azure"), models.ClientTypeAzure)
+		assert.Equal(t, models.ClientType("dashscope"), models.ClientTypeDashscope)
+		assert.Equal(t, models.ClientType("other"), models.ClientTypeOther)
 	})
 }
 

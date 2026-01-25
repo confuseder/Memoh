@@ -24,8 +24,6 @@ const (
 	DefaultMemoryTimeout    = 10
 	DefaultQdrantURL        = "http://127.0.0.1:6334"
 	DefaultQdrantCollection = "memory"
-	DefaultEmbeddingModel   = "text-embedding-3-small"
-	DefaultEmbeddingDims    = 1536
 )
 
 type Config struct {
@@ -36,7 +34,6 @@ type Config struct {
 	Postgres   PostgresConfig   `toml:"postgres"`
 	Memory     MemoryConfig     `toml:"memory"`
 	Qdrant     QdrantConfig     `toml:"qdrant"`
-	Embeddings EmbeddingsConfig `toml:"embeddings"`
 }
 
 type ServerConfig struct {
@@ -83,15 +80,6 @@ type QdrantConfig struct {
 	TimeoutSeconds int    `toml:"timeout_seconds"`
 }
 
-type EmbeddingsConfig struct {
-	Provider       string `toml:"provider"`
-	OpenAIAPIKey   string `toml:"openai_api_key"`
-	OpenAIBaseURL  string `toml:"openai_base_url"`
-	Model          string `toml:"model"`
-	Dimensions     int    `toml:"dimensions"`
-	TimeoutSeconds int    `toml:"timeout_seconds"`
-}
-
 func Load(path string) (Config, error) {
 	cfg := Config{
 		Server: ServerConfig{
@@ -124,11 +112,6 @@ func Load(path string) (Config, error) {
 		Qdrant: QdrantConfig{
 			BaseURL:    DefaultQdrantURL,
 			Collection: DefaultQdrantCollection,
-		},
-		Embeddings: EmbeddingsConfig{
-			Provider:   "openai",
-			Model:      DefaultEmbeddingModel,
-			Dimensions: DefaultEmbeddingDims,
 		},
 	}
 

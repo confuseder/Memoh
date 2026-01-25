@@ -22,12 +22,44 @@ func NewMemoryHandler(service *memory.Service) *MemoryHandler {
 func (h *MemoryHandler) Register(e *echo.Echo) {
 	group := e.Group("/memory")
 	group.POST("/add", h.Add)
+	group.POST("/embed", h.EmbedUpsert)
 	group.POST("/search", h.Search)
 	group.POST("/update", h.Update)
 	group.GET("/memories/:memoryId", h.Get)
 	group.GET("/memories", h.GetAll)
 	group.DELETE("/memories/:memoryId", h.Delete)
 	group.DELETE("/memories", h.DeleteAll)
+}
+
+// EmbedUpsert godoc
+// @Summary Embed and upsert memory
+// @Description Embed text or multimodal input and upsert into memory store
+// @Tags memory
+// @Param payload body memory.EmbedUpsertRequest true "Embed upsert request"
+// @Success 200 {object} memory.EmbedUpsertResponse
+// @Failure 400 {object} ErrorResponse
+// @Failure 500 {object} ErrorResponse
+// @Router /memory/embed [post]
+func (h *MemoryHandler) EmbedUpsert(c echo.Context) error {
+	userID, err := h.requireUserID(c)
+	if err != nil {
+		return err
+	}
+
+	var req memory.EmbedUpsertRequest
+	if err := c.Bind(&req); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+	}
+	if req.UserID != "" && req.UserID != userID {
+		return echo.NewHTTPError(http.StatusForbidden, "user mismatch")
+	}
+	req.UserID = userID
+
+	resp, err := h.service.EmbedUpsert(c.Request().Context(), req)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+	}
+	return c.JSON(http.StatusOK, resp)
 }
 
 // Add godoc

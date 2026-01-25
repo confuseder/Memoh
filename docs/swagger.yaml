@@ -26,6 +26,56 @@ definitions:
       version:
         type: integer
     type: object
+  handlers.EmbeddingsInput:
+    properties:
+      image_url:
+        type: string
+      text:
+        type: string
+      video_url:
+        type: string
+    type: object
+  handlers.EmbeddingsRequest:
+    properties:
+      dimensions:
+        type: integer
+      input:
+        $ref: '#/definitions/handlers.EmbeddingsInput'
+      model:
+        type: string
+      provider:
+        type: string
+      type:
+        type: string
+    type: object
+  handlers.EmbeddingsResponse:
+    properties:
+      dimensions:
+        type: integer
+      embedding:
+        items:
+          type: number
+        type: array
+      message:
+        type: string
+      model:
+        type: string
+      provider:
+        type: string
+      type:
+        type: string
+      usage:
+        $ref: '#/definitions/handlers.EmbeddingsUsage'
+    type: object
+  handlers.EmbeddingsUsage:
+    properties:
+      image_tokens:
+        type: integer
+      input_tokens:
+        type: integer
+      video_tokens:
+        type: integer
+    type: object
   handlers.ErrorResponse:
     properties:
       message:
@@ -138,6 +188,51 @@ definitions:
       message:
         type: string
     type: object
+  memory.EmbedInput:
+    properties:
+      image_url:
+        type: string
+      text:
+        type: string
+      video_url:
+        type: string
+    type: object
+  memory.EmbedUpsertRequest:
+    properties:
+      agent_id:
+        type: string
+      filters:
+        additionalProperties: true
+        type: object
+      input:
+        $ref: '#/definitions/memory.EmbedInput'
+      metadata:
+        additionalProperties: true
+        type: object
+      model:
+        type: string
+      provider:
+        type: string
+      run_id:
+        type: string
+      source:
+        type: string
+      type:
+        type: string
+      user_id:
+        type: string
+    type: object
+  memory.EmbedUpsertResponse:
+    properties:
+      dimensions:
+        type: integer
+      item:
+        $ref: '#/definitions/memory.MemoryItem'
+      model:
+        type: string
+      provider:
+        type: string
+    type: object
   memory.MemoryItem:
     properties:
       agentId:
@@ -182,6 +277,10 @@ definitions:
         type: string
       run_id:
         type: string
+      sources:
+        items:
+          type: string
+        type: array
       user_id:
         type: string
     type: object
@@ -204,20 +303,18 @@ definitions:
     type: object
   models.AddRequest:
     properties:
-      api_key:
-        type: string
-      base_url:
-        type: string
-      client_type:
-        $ref: '#/definitions/models.ClientType'
       dimensions:
         type: integer
+      is_multimodal:
+        type: boolean
+      llm_provider_id:
+        type: string
       model_id:
         type: string
       name:
         type: string
       type:
-        type: string
+        $ref: '#/definitions/models.ModelType'
     type: object
   models.AddResponse:
     properties:
@@ -226,16 +323,6 @@ definitions:
       model_id:
         type: string
     type: object
-  models.ClientType:
-    enum:
-    - openai
-    - anthropic
-    - google
-    type: string
-    x-enum-varnames:
-    - ClientTypeOpenAI
-    - ClientTypeAnthropic
-    - ClientTypeGoogle
   models.CountResponse:
     properties:
       count:
@@ -243,37 +330,41 @@ definitions:
     type: object
   models.GetResponse:
     properties:
-      api_key:
-        type: string
-      base_url:
-        type: string
-      client_type:
-        $ref: '#/definitions/models.ClientType'
       dimensions:
         type: integer
+      is_multimodal:
+        type: boolean
+      llm_provider_id:
+        type: string
       model_id:
         type: string
       name:
         type: string
       type:
-        type: string
+        $ref: '#/definitions/models.ModelType'
     type: object
+  models.ModelType:
+    enum:
+    - chat
+    - embedding
+    type: string
+    x-enum-varnames:
+    - ModelTypeChat
+    - ModelTypeEmbedding
   models.UpdateRequest:
     properties:
-      api_key:
-        type: string
-      base_url:
-        type: string
-      client_type:
-        $ref: '#/definitions/models.ClientType'
       dimensions:
         type: integer
+      is_multimodal:
+        type: boolean
+      llm_provider_id:
+        type: string
       model_id:
         type: string
       name:
         type: string
       type:
-        type: string
+        $ref: '#/definitions/models.ModelType'
     type: object
 info:
   contact: {}
@@ -308,6 +399,36 @@ paths:
       summary: Login
       tags:
       - auth
+  /embeddings:
+    post:
+      description: Create text or multimodal embeddings
+      parameters:
+      - description: Embeddings request
+        in: body
+        name: payload
+        required: true
+        schema:
+          $ref: '#/definitions/handlers.EmbeddingsRequest'
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.EmbeddingsResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "501":
+          description: Not Implemented
+          schema:
+            $ref: '#/definitions/handlers.EmbeddingsResponse'
+      summary: Create embeddings
+      tags:
+      - embeddings
   /fs/apply_patch:
     post:
       description: Apply a unified diff patch to a file under the user data mount
@@ -504,6 +625,32 @@ paths:
           schema:
             $ref: '#/definitions/handlers.ErrorResponse'
       summary: Add memory
+      tags:
+      - memory
+  /memory/embed:
+    post:
+      description: Embed text or multimodal input and upsert into memory store
+      parameters:
+      - description: Embed upsert request
+        in: body
+        name: payload
+        required: true
+        schema:
+          $ref: '#/definitions/memory.EmbedUpsertRequest'
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/memory.EmbedUpsertResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+      summary: Embed and upsert memory
       tags:
       - memory
   /memory/memories:

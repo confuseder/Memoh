@@ -1,12 +1,58 @@
+-- name: CreateLlmProvider :one
+INSERT INTO llm_providers (name, client_type, base_url, api_key, metadata)
+VALUES (
+  sqlc.arg(name),
+  sqlc.arg(client_type),
+  sqlc.arg(base_url),
+  sqlc.arg(api_key),
+  sqlc.arg(metadata)
+)
+RETURNING *;
+
+-- name: GetLlmProviderByID :one
+SELECT * FROM llm_providers WHERE id = sqlc.arg(id);
+
+-- name: GetLlmProviderByName :one
+SELECT * FROM llm_providers WHERE name = sqlc.arg(name);
+
+-- name: ListLlmProviders :many
+SELECT * FROM llm_providers
+ORDER BY created_at DESC;
+
+-- name: ListLlmProvidersByClientType :many
+SELECT * FROM llm_providers
+WHERE client_type = sqlc.arg(client_type)
+ORDER BY created_at DESC;
+
+-- name: UpdateLlmProvider :one
+UPDATE llm_providers
+SET
+  name = sqlc.arg(name),
+  client_type = sqlc.arg(client_type),
+  base_url = sqlc.arg(base_url),
+  api_key = sqlc.arg(api_key),
+  metadata = sqlc.arg(metadata),
+  updated_at = now()
+WHERE id = sqlc.arg(id)
+RETURNING *;
+
+-- name: DeleteLlmProvider :exec
+DELETE FROM llm_providers WHERE id = sqlc.arg(id);
+
+-- name: CountLlmProviders :one
+SELECT COUNT(*) FROM llm_providers;
+
+-- name: CountLlmProvidersByClientType :one
+SELECT COUNT(*) FROM llm_providers WHERE client_type = sqlc.arg(client_type);
+
 -- name: CreateModel :one
-INSERT INTO models (model_id, name, base_url, api_key, client_type, dimensions, type)
+INSERT INTO models (model_id, name, llm_provider_id, dimensions, is_multimodal, type)
 VALUES (
   sqlc.arg(model_id),
   sqlc.arg(name),
-  sqlc.arg(base_url),
-  sqlc.arg(api_key),
-  sqlc.arg(client_type),
+  sqlc.arg(llm_provider_id),
   sqlc.arg(dimensions),
+  sqlc.arg(is_multimodal),
   sqlc.arg(type)
 )
 RETURNING *;
@@ -27,18 +73,18 @@ WHERE type = sqlc.arg(type)
 ORDER BY created_at DESC;
 
 -- name: ListModelsByClientType :many
-SELECT * FROM models
-WHERE client_type = sqlc.arg(client_type)
-ORDER BY created_at DESC;
+SELECT m.* FROM models AS m
+JOIN llm_providers AS p ON p.id = m.llm_provider_id
+WHERE p.client_type = sqlc.arg(client_type)
+ORDER BY m.created_at DESC;
 
 -- name: UpdateModel :one
 UPDATE models
 SET
   name = sqlc.arg(name),
-  base_url = sqlc.arg(base_url),
-  api_key = sqlc.arg(api_key),
-  client_type = sqlc.arg(client_type),
+  llm_provider_id = sqlc.arg(llm_provider_id),
   dimensions = sqlc.arg(dimensions),
+  is_multimodal = sqlc.arg(is_multimodal),
   type = sqlc.arg(type),
   updated_at = now()
 WHERE id = sqlc.arg(id)
@@ -48,10 +94,9 @@ RETURNING *;
 UPDATE models
 SET
   name = sqlc.arg(name),
-  base_url = sqlc.arg(base_url),
-  api_key = sqlc.arg(api_key),
-  client_type = sqlc.arg(client_type),
+  llm_provider_id = sqlc.arg(llm_provider_id),
   dimensions = sqlc.arg(dimensions),
+  is_multimodal = sqlc.arg(is_multimodal),
   type = sqlc.arg(type),
   updated_at = now()
 WHERE model_id = sqlc.arg(model_id)
@@ -68,4 +113,40 @@ SELECT COUNT(*) FROM models;
 
 -- name: CountModelsByType :one
 SELECT COUNT(*) FROM models WHERE type = sqlc.arg(type);
+
+-- name: CreateModelVariant :one
+INSERT INTO model_variants (model_uuid, variant_id, weight, metadata)
+VALUES (
+  sqlc.arg(model_uuid),
+  sqlc.arg(variant_id),
+  sqlc.arg(weight),
+  sqlc.arg(metadata)
+)
+RETURNING *;
+
+-- name: GetModelVariantByID :one
+SELECT * FROM model_variants WHERE id = sqlc.arg(id);
+
+-- name: ListModelVariantsByModelUUID :many
+SELECT * FROM model_variants
+WHERE model_uuid = sqlc.arg(model_uuid)
+ORDER BY weight DESC, created_at DESC;
+
+-- name: ListModelVariantsByVariantID :many
+SELECT * FROM model_variants
+WHERE variant_id = sqlc.arg(variant_id)
+ORDER BY created_at DESC;
+
+-- name: UpdateModelVariant :one
+UPDATE model_variants
+SET
+  variant_id = sqlc.arg(variant_id),
+  weight = sqlc.arg(weight),
+  metadata = sqlc.arg(metadata),
+  updated_at = now()
+WHERE id = sqlc.arg(id)
+RETURNING *;
+
+-- name: DeleteModelVariant :exec
+DELETE FROM model_variants WHERE id = sqlc.arg(id);
 

@@ -2,13 +2,15 @@ package models
 
 import (
 	"errors"
+
+	"github.com/google/uuid"
 )
 
 type ModelType string
 
 const (
-	ModelTypeChat      = "chat"
-	ModelTypeEmbedding = "embedding"
+	ModelTypeChat      ModelType = "chat"
+	ModelTypeEmbedding ModelType = "embedding"
 )
 
 type ClientType string
@@ -17,36 +19,34 @@ const (
 	ClientTypeOpenAI    ClientType = "openai"
 	ClientTypeAnthropic ClientType = "anthropic"
 	ClientTypeGoogle    ClientType = "google"
+	ClientTypeBedrock   ClientType = "bedrock"
+	ClientTypeOllama    ClientType = "ollama"
+	ClientTypeAzure     ClientType = "azure"
+	ClientTypeDashscope ClientType = "dashscope"
+	ClientTypeOther     ClientType = "other"
 )
 
 type Model struct {
-	ModelID    string     `json:"model_id"`
-	Name       string     `json:"name"`
-	BaseURL    string     `json:"base_url"`
-	APIKey     string     `json:"api_key"`
-	ClientType ClientType `json:"client_type"`
-	Type       ModelType  `json:"type"`
-	Dimensions int        `json:"dimensions"`
+	ModelID       string    `json:"model_id"`
+	Name          string    `json:"name"`
+	LlmProviderID string    `json:"llm_provider_id"`
+	IsMultimodal  bool      `json:"is_multimodal"`
+	Type          ModelType `json:"type"`
+	Dimensions    int       `json:"dimensions"`
 }
 
 func (m *Model) Validate() error {
 	if m.ModelID == "" {
 		return errors.New("model ID is required")
 	}
-	if m.BaseURL == "" {
-		return errors.New("base URL is required")
+	if m.LlmProviderID == "" {
+		return errors.New("llm provider ID is required")
 	}
-	if m.APIKey == "" {
-		return errors.New("API key is required")
-	}
-	if m.ClientType == "" {
-		return errors.New("client type is required")
+	if _, err := uuid.Parse(m.LlmProviderID); err != nil {
+		return errors.New("llm provider ID must be a valid UUID")
 	}
 	if m.Type != ModelTypeChat && m.Type != ModelTypeEmbedding {
 		return errors.New("invalid model type")
-	}
-	if m.ClientType != ClientTypeOpenAI && m.ClientType != ClientTypeAnthropic && m.ClientType != ClientTypeGoogle {
-		return errors.New("invalid client type")
 	}
 	if m.Type == ModelTypeEmbedding && m.Dimensions <= 0 {
 		return errors.New("dimensions must be greater than 0")

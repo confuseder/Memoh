@@ -23,6 +23,7 @@ type SearchRequest struct {
 	RunID   string                 `json:"run_id,omitempty"`
 	Limit   int                    `json:"limit,omitempty"`
 	Filters map[string]interface{} `json:"filters,omitempty"`
+	Sources []string               `json:"sources,omitempty"`
 }
 
 type UpdateRequest struct {
@@ -41,6 +42,32 @@ type DeleteAllRequest struct {
 	UserID  string `json:"user_id,omitempty"`
 	AgentID string `json:"agent_id,omitempty"`
 	RunID   string `json:"run_id,omitempty"`
+}
+
+type EmbedInput struct {
+	Text     string `json:"text,omitempty"`
+	ImageURL string `json:"image_url,omitempty"`
+	VideoURL string `json:"video_url,omitempty"`
+}
+
+type EmbedUpsertRequest struct {
+	Type     string                 `json:"type"`
+	Provider string                 `json:"provider,omitempty"`
+	Model    string                 `json:"model,omitempty"`
+	Input    EmbedInput             `json:"input"`
+	Source   string                 `json:"source,omitempty"`
+	UserID   string                 `json:"user_id,omitempty"`
+	AgentID  string                 `json:"agent_id,omitempty"`
+	RunID    string                 `json:"run_id,omitempty"`
+	Metadata map[string]interface{} `json:"metadata,omitempty"`
+	Filters  map[string]interface{} `json:"filters,omitempty"`
+}
+
+type EmbedUpsertResponse struct {
+	Item       MemoryItem `json:"item"`
+	Provider   string     `json:"provider"`
+	Model      string     `json:"model"`
+	Dimensions int        `json:"dimensions"`
 }
 
 type MemoryItem struct {

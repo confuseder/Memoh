@@ -41,17 +41,37 @@ type LifecycleEvent struct {
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 }
 
-type Model struct {
+type LlmProvider struct {
 	ID         pgtype.UUID        `json:"id"`
-	ModelID    string             `json:"model_id"`
-	Name       pgtype.Text        `json:"name"`
+	Name       string             `json:"name"`
+	ClientType string             `json:"client_type"`
 	BaseUrl    string             `json:"base_url"`
 	ApiKey     string             `json:"api_key"`
-	ClientType string             `json:"client_type"`
-	Dimensions pgtype.Int4        `json:"dimensions"`
-	Type       string             `json:"type"`
+	Metadata   []byte             `json:"metadata"`
 	CreatedAt  pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt  pgtype.Timestamptz `json:"updated_at"`
+}
+
+type Model struct {
+	ID            pgtype.UUID        `json:"id"`
+	ModelID       string             `json:"model_id"`
+	Name          pgtype.Text        `json:"name"`
+	LlmProviderID pgtype.UUID        `json:"llm_provider_id"`
+	Dimensions    pgtype.Int4        `json:"dimensions"`
+	IsMultimodal  bool               `json:"is_multimodal"`
+	Type          string             `json:"type"`
+	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt     pgtype.Timestamptz `json:"updated_at"`
+}
+
+type ModelVariant struct {
+	ID        pgtype.UUID        `json:"id"`
+	ModelUuid pgtype.UUID        `json:"model_uuid"`
+	VariantID string             `json:"variant_id"`
+	Weight    int32              `json:"weight"`
+	Metadata  []byte             `json:"metadata"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
 }
 
 type Snapshot struct {

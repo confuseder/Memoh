@@ -39,14 +39,5 @@ timeout_seconds = 10
 [qdrant]
 base_url = "http://127.0.0.1:6334"
 api_key = ""
-collection = "mem0"
-timeout_seconds = 10
-
-## Embeddings configuration
-[embeddings]
-provider = "openai"
-openai_api_key = ""
-openai_base_url = "https://api.openai.com/v1"
-model = "text-embedding-3-small"
-dimensions = 1536
+collection = "memory"
 timeout_seconds = 10

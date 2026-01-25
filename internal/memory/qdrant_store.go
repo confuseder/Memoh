@@ -15,12 +15,18 @@ type QdrantStore struct {
 	client     *qdrant.Client
 	collection string
 	dimension  int
+	baseURL    string
+	apiKey     string
+	timeout    time.Duration
+	vectorNames map[string]int
+	usesNamedVectors bool
 }
 
 type qdrantPoint struct {
-	ID      string                 `json:"id"`
-	Vector  []float32              `json:"vector"`
-	Payload map[string]interface{} `json:"payload,omitempty"`
+	ID         string                 `json:"id"`
+	Vector     []float32              `json:"vector"`
+	VectorName string                 `json:"vector_name,omitempty"`
+	Payload    map[string]interface{} `json:"payload,omitempty"`
 }
 
 func NewQdrantStore(baseURL, apiKey, collection string, dimension int, timeout time.Duration) (*QdrantStore, error) {
@@ -50,11 +56,59 @@ func NewQdrantStore(baseURL, apiKey, collection string, dimension int, timeout t
 		client:     client,
 		collection: collection,
 		dimension:  dimension,
+		baseURL:    baseURL,
+		apiKey:     apiKey,
+		timeout:    timeoutOrDefault(timeout),
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), timeoutOrDefault(timeout))
 	defer cancel()
-	if err := store.ensureCollection(ctx); err != nil {
+	if err := store.ensureCollection(ctx, nil); err != nil {
+		return nil, err
+	}
+	return store, nil
+}
+
+func (s *QdrantStore) NewSibling(collection string, dimension int) (*QdrantStore, error) {
+	return NewQdrantStore(s.baseURL, s.apiKey, collection, dimension, s.timeout)
+}
+
+func NewQdrantStoreWithVectors(baseURL, apiKey, collection string, vectors map[string]int, timeout time.Duration) (*QdrantStore, error) {
+	host, port, useTLS, err := parseQdrantEndpoint(baseURL)
+	if err != nil {
+		return nil, err
+	}
+	if collection == "" {
+		collection = "memory"
+	}
+	if len(vectors) == 0 {
+		return nil, fmt.Errorf("vectors map is required")
+	}
+
+	cfg := &qdrant.Config{
+		Host:   host,
+		Port:   port,
+		APIKey: apiKey,
+		UseTLS: useTLS,
+	}
+	client, err := qdrant.NewClient(cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	store := &QdrantStore{
+		client:     client,
+		collection: collection,
+		baseURL:    baseURL,
+		apiKey:     apiKey,
+		timeout:    timeoutOrDefault(timeout),
+		vectorNames: vectors,
+		usesNamedVectors: true,
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), timeoutOrDefault(timeout))
+	defer cancel()
+	if err := store.ensureCollection(ctx, vectors); err != nil {
 		return nil, err
 	}
 	return store, nil
@@ -70,9 +124,17 @@ func (s *QdrantStore) Upsert(ctx context.Context, points []qdrantPoint) error {
 		if err != nil {
 			return err
 		}
+		var vectors *qdrant.Vectors
+		if point.VectorName != "" && s.usesNamedVectors {
+			vectors = qdrant.NewVectorsMap(map[string]*qdrant.Vector{
+				point.VectorName: qdrant.NewVectorDense(point.Vector),
+			})
+		} else {
+			vectors = qdrant.NewVectorsDense(point.Vector)
+		}
 		qPoints = append(qPoints, &qdrant.PointStruct{
 			Id:      qdrant.NewIDUUID(point.ID),
-			Vectors: qdrant.NewVectorsDense(point.Vector),
+			Vectors: vectors,
 			Payload: payload,
 		})
 	}
@@ -84,14 +146,19 @@ func (s *QdrantStore) Upsert(ctx context.Context, points []qdrantPoint) error {
 	return err
 }
 
-func (s *QdrantStore) Search(ctx context.Context, vector []float32, limit int, filters map[string]interface{}) ([]qdrantPoint, []float64, error) {
+func (s *QdrantStore) Search(ctx context.Context, vector []float32, limit int, filters map[string]interface{}, vectorName string) ([]qdrantPoint, []float64, error) {
 	if limit <= 0 {
 		limit = 10
 	}
 	filter := buildQdrantFilter(filters)
+	var using *string
+	if vectorName != "" && s.usesNamedVectors {
+		using = qdrant.PtrOf(vectorName)
+	}
 	results, err := s.client.Query(ctx, &qdrant.QueryPoints{
 		CollectionName: s.collection,
 		Query:          qdrant.NewQueryDense(vector),
+		Using:          using,
 		Limit:          qdrant.PtrOf(uint64(limit)),
 		Filter:         filter,
 		WithPayload:    qdrant.NewWithPayload(true),
@@ -110,6 +177,27 @@ func (s *QdrantStore) Search(ctx context.Context, vector []float32, limit int, f
 		scores = append(scores, float64(scored.GetScore()))
 	}
 	return points, scores, nil
+}
+
+func (s *QdrantStore) SearchBySources(ctx context.Context, vector []float32, limit int, filters map[string]interface{}, sources []string, vectorName string) (map[string][]qdrantPoint, map[string][]float64, error) {
+	pointsBySource := make(map[string][]qdrantPoint, len(sources))
+	scoresBySource := make(map[string][]float64, len(sources))
+	if len(sources) == 0 {
+		return pointsBySource, scoresBySource, nil
+	}
+	for _, source := range sources {
+		merged := cloneFilters(filters)
+		if source != "" {
+			merged["source"] = source
+		}
+		points, scores, err := s.Search(ctx, vector, limit, merged, vectorName)
+		if err != nil {
+			return nil, nil, err
+		}
+		pointsBySource[source] = points
+		scoresBySource[source] = scores
+	}
+	return pointsBySource, scoresBySource, nil
 }
 
 func (s *QdrantStore) Get(ctx context.Context, id string) (*qdrantPoint, error) {
@@ -178,13 +266,26 @@ func (s *QdrantStore) DeleteAll(ctx context.Context, filters map[string]interfac
 	return err
 }
 
-func (s *QdrantStore) ensureCollection(ctx context.Context) error {
+func (s *QdrantStore) ensureCollection(ctx context.Context, vectors map[string]int) error {
 	exists, err := s.client.CollectionExists(ctx, s.collection)
 	if err != nil {
 		return err
 	}
 	if exists {
-		return nil
+		return s.refreshCollectionSchema(ctx, vectors)
+	}
+	if len(vectors) > 0 {
+		params := make(map[string]*qdrant.VectorParams, len(vectors))
+		for name, dim := range vectors {
+			params[name] = &qdrant.VectorParams{
+				Size:     uint64(dim),
+				Distance: qdrant.Distance_Cosine,
+			}
+		}
+		return s.client.CreateCollection(ctx, &qdrant.CreateCollection{
+			CollectionName: s.collection,
+			VectorsConfig:  qdrant.NewVectorsConfigMap(params),
+		})
 	}
 	return s.client.CreateCollection(ctx, &qdrant.CreateCollection{
 		CollectionName: s.collection,
@@ -193,6 +294,40 @@ func (s *QdrantStore) ensureCollection(ctx context.Context) error {
 			Distance: qdrant.Distance_Cosine,
 		}),
 	})
+}
+
+func (s *QdrantStore) refreshCollectionSchema(ctx context.Context, vectors map[string]int) error {
+	info, err := s.client.GetCollectionInfo(ctx, s.collection)
+	if err != nil {
+		return err
+	}
+	config := info.GetConfig()
+	if config == nil || config.GetParams() == nil || config.GetParams().GetVectorsConfig() == nil {
+		return nil
+	}
+	vectorsConfig := config.GetParams().GetVectorsConfig()
+	if vectorsConfig.GetParamsMap() != nil {
+		s.usesNamedVectors = true
+		s.vectorNames = map[string]int{}
+		for name, vec := range vectorsConfig.GetParamsMap().GetMap() {
+			if vec != nil {
+				s.vectorNames[name] = int(vec.GetSize())
+			}
+		}
+		if len(vectors) == 0 {
+			return nil
+		}
+		for name, dim := range vectors {
+			if existing, ok := s.vectorNames[name]; ok && existing == dim {
+				continue
+			}
+			return fmt.Errorf("collection missing vector %s (dim %d); migration required", name, dim)
+		}
+		return nil
+	}
+	s.usesNamedVectors = false
+	s.vectorNames = nil
+	return nil
 }
 
 func parseQdrantEndpoint(endpoint string) (string, int, bool, error) {
@@ -245,6 +380,17 @@ func buildQdrantFilter(filters map[string]interface{}) *qdrant.Filter {
 	return &qdrant.Filter{
 		Must: conditions,
 	}
+}
+
+func cloneFilters(filters map[string]interface{}) map[string]interface{} {
+	if len(filters) == 0 {
+		return map[string]interface{}{}
+	}
+	clone := make(map[string]interface{}, len(filters))
+	for key, value := range filters {
+		clone[key] = value
+	}
+	return clone
 }
 
 func buildQdrantCondition(key string, value interface{}) *qdrant.Condition {
