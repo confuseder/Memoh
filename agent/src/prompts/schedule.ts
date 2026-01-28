@@ -1,4 +1,4 @@
-import { Schedule } from '@memoh/shared'
+import { Schedule } from '../types'
 import { time } from './shared'
 
 export interface ScheduleParams {

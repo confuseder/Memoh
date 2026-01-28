@@ -8,7 +8,7 @@ export default [
   ...vue.configs['flat/recommended'],
   { ignores: ['**/node_modules/**', '**/dist/**'] },
   {
-    files: ['packages/**/*.{js,jsx,ts,tsx}'],
+    files: ['packages/**/*.{js,jsx,ts,tsx}', 'agent/**/*.{js,jsx,ts,tsx}'],
     languageOptions: {
       parserOptions: {
         ecmaVersion: 2022,
@@ -22,7 +22,7 @@ export default [
     },
   },
   {
-    files: ['packages/**/*.vue'],
+    files: ['packages/**/*.vue', 'agent/**/*.vue'],
     languageOptions: {
       parser: vueParser,
       parserOptions: {

@@ -1,24 +1,23 @@
-import { Platform } from '@memoh/shared'
 import { time } from './shared'
 import { quote } from './utils'
 
 export interface SystemParams {
   date: Date
   locale?: Intl.LocalesArgument
-  language: string
+  language?: string
   maxContextLoadTime: number
-  platforms: Platform[]
-  currentPlatform: string
+  platforms: string[]
+  currentPlatform?: string
 }
 
 export const system = ({ date, locale, language, maxContextLoadTime, platforms, currentPlatform }: SystemParams) => {
   return `
 ---
 ${time({ date, locale })}
-language: ${language}
+language: ${language ?? 'Same as user input'}
 available-platforms:
-${platforms.map(platform => `  - ${platform.name}`).join('\n')}
-current-platform: ${currentPlatform}
+${platforms.map(platform => `  - ${platform}`).join('\n')}
+current-platform: ${currentPlatform ?? 'Unknown Platform'}
 ---
 You are a personal housekeeper assistant, which able to manage the master's daily affairs.
 
