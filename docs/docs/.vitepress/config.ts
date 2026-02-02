@@ -2,80 +2,72 @@ import { defineConfig } from 'vitepress'
 
 // https://vitepress.vuejs.org/config/app-configs
 export default defineConfig({
-  title: 'Memoh',
-  description: '长记忆、自托管、AI 驱动的个人生活助手',
-  
-  // GitHub Pages 部署配置
-  // 使用自定义域名时，base 应该是 /
+  title: 'Memoh Documentation',
+  description: 'Multi-Member, Structured Long-Memory, Containerized AI Agent System.',
+
+  head: [
+    ['link', { rel: 'icon', href: '/logo.png' }]
+  ],
+
   base: '/',
-  
-  // 主题配置
+
+  locales: {
+    root: {
+      label: 'English',
+      lang: 'en'
+    },
+    zh: {
+      label: '简体中文',
+      lang: 'zh',
+    }
+  },
+
   themeConfig: {
-    // 网站标题（显示在导航栏）
     siteTitle: 'Memoh',
-    
-    // 导航栏
-    nav: [
-      { text: '指南', link: '/guide/getting-started' },
-      { text: 'Telegram Bot', link: '/platforms/telegram' },
-      { text: 'CLI 工具', link: '/cli/' }
-    ],
-    
-    // 侧边栏
     sidebar: {
-      '/guide/': [
+      '/': [
         {
-          text: '开始使用',
-          items: [
-            { text: '快速开始', link: '/guide/getting-started' },
-            { text: '安装', link: '/guide/installation' },
-            { text: '配置', link: '/guide/configuration' }
-          ]
+          text: 'Hello Memoh',
+          link: '/index.md'
+        },
+        {
+          text: 'Getting Started',
+          link: '/getting-started.md'
         }
       ],
-      '/platforms/': [
+      '/zh/': [
         {
-          text: '平台集成',
-          items: [
-            { text: 'Telegram', link: '/platforms/telegram' }
-          ]
-        }
-      ],
-      '/cli/': [
-        {
-          text: '命令行工具',
-          items: [
-            { text: '介绍', link: '/cli/' }
-          ]
-        }
+          text: 'Hello Memoh',
+          link: '/zh/index.md'
+        },
       ]
     },
+
+    logo: {
+      src: '/logo.png',
+      alt: 'Memoh'
+    },
     
-    // 社交链接
     socialLinks: [
       { icon: 'github', link: 'https://github.com/memohai/Memoh' }
     ],
     
-    // 页脚
     footer: {
-      message: '基于 MIT 许可发布',
+      message: 'Published under AGPLv3',
       copyright: 'Copyright © 2024 Memoh'
     },
     
-    // 搜索
     search: {
       provider: 'local'
     },
     
-    // 编辑链接
     editLink: {
       pattern: 'https://github.com/memohai/Memoh/edit/main/docs/docs/:path',
-      text: '在 GitHub 上编辑此页'
+      text: 'Edit on GitHub'
     },
     
-    // 最后更新时间
     lastUpdated: {
-      text: '最后更新于',
+      text: 'Last Updated',
       formatOptions: {
         dateStyle: 'short',
         timeStyle: 'medium'
