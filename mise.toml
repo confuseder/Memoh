@@ -65,6 +65,15 @@ description = "Install CLI"
 depends = ["//:pnpm-install"]
 run = "cd packages/cli && npm install -g"
 
+[tasks.build-cli]
+description = "Build Go CLI binary and install to local bin"
+run = """
+mkdir -p ~/.local/bin
+go build -trimpath -ldflags "-s -w" -o ~/.local/bin/container-cli ./cmd/cli
+chmod +x ~/.local/bin/container-cli
+echo "✓ CLI binary installed to ~/.local/bin/container-cli"
+"""
+
 [tasks.mcp-image-up]
 description = "Build MCP container image"
 run = "scripts/mcp-image-up.sh"
