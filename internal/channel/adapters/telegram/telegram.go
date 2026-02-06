@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
@@ -14,23 +15,53 @@ import (
 	"github.com/memohai/memoh/internal/channel/adapters/common"
 )
 
+// TelegramAdapter implements the channel.Adapter, channel.Sender, and channel.Receiver interfaces for Telegram.
 type TelegramAdapter struct {
 	logger *slog.Logger
+	mu     sync.RWMutex
+	bots   map[string]*tgbotapi.BotAPI // keyed by bot token
 }
 
+// NewTelegramAdapter creates a TelegramAdapter with the given logger.
 func NewTelegramAdapter(log *slog.Logger) *TelegramAdapter {
 	if log == nil {
 		log = slog.Default()
 	}
 	return &TelegramAdapter{
 		logger: log.With(slog.String("adapter", "telegram")),
+		bots:   make(map[string]*tgbotapi.BotAPI),
 	}
 }
 
+func (a *TelegramAdapter) getOrCreateBot(token, configID string) (*tgbotapi.BotAPI, error) {
+	a.mu.RLock()
+	bot, ok := a.bots[token]
+	a.mu.RUnlock()
+	if ok {
+		return bot, nil
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if bot, ok := a.bots[token]; ok {
+		return bot, nil
+	}
+	bot, err := tgbotapi.NewBotAPI(token)
+	if err != nil {
+		if a.logger != nil {
+			a.logger.Error("create bot failed", slog.String("config_id", configID), slog.Any("error", err))
+		}
+		return nil, err
+	}
+	a.bots[token] = bot
+	return bot, nil
+}
+
+// Type returns the Telegram channel type.
 func (a *TelegramAdapter) Type() channel.ChannelType {
 	return Type
 }
 
+// Connect starts long-polling for Telegram updates and forwards messages to the handler.
 func (a *TelegramAdapter) Connect(ctx context.Context, cfg channel.ChannelConfig, handler channel.InboundHandler) (channel.Connection, error) {
 	if a.logger != nil {
 		a.logger.Info("start", slog.String("config_id", cfg.ID))
@@ -147,6 +178,7 @@ func (a *TelegramAdapter) Connect(ctx context.Context, cfg channel.ChannelConfig
 	return channel.NewConnection(cfg, stop), nil
 }
 
+// Send delivers an outbound message to Telegram, handling text, attachments, and replies.
 func (a *TelegramAdapter) Send(ctx context.Context, cfg channel.ChannelConfig, msg channel.OutboundMessage) error {
 	telegramCfg, err := parseConfig(cfg.Credentials)
 	if err != nil {
@@ -159,11 +191,8 @@ func (a *TelegramAdapter) Send(ctx context.Context, cfg channel.ChannelConfig, m
 	if to == "" {
 		return fmt.Errorf("telegram target is required")
 	}
-	bot, err := tgbotapi.NewBotAPI(telegramCfg.BotToken)
+	bot, err := a.getOrCreateBot(telegramCfg.BotToken, cfg.ID)
 	if err != nil {
-		if a.logger != nil {
-			a.logger.Error("create bot failed", slog.String("config_id", cfg.ID), slog.Any("error", err))
-		}
 		return err
 	}
 	if msg.Message.IsEmpty() {
@@ -218,7 +247,7 @@ func resolveTelegramSender(msg *tgbotapi.Message) (string, string, map[string]st
 		}
 		displayName := strings.TrimSpace(msg.From.UserName)
 		if displayName == "" {
-			displayName = strings.TrimSpace(strings.TrimSpace(msg.From.FirstName + " " + msg.From.LastName))
+			displayName = strings.TrimSpace(msg.From.FirstName + " " + msg.From.LastName)
 		}
 		externalID := userID
 		if externalID == "" {
@@ -320,22 +349,28 @@ func sendTelegramAttachment(bot *tgbotapi.BotAPI, target string, att channel.Att
 		_, err := bot.Send(photo)
 		return err
 	case channel.AttachmentFile, "":
-		chatID, err := strconv.ParseInt(target, 10, 64)
-		if err != nil && !isChannel {
-			return fmt.Errorf("telegram target must be @username or chat_id")
-		}
-		document := tgbotapi.NewDocument(chatID, file)
+		var document tgbotapi.DocumentConfig
 		if isChannel {
-			document.ChatID = 0
-			document.ChannelUsername = target
+			document = tgbotapi.DocumentConfig{
+				BaseFile: tgbotapi.BaseFile{
+					BaseChat: tgbotapi.BaseChat{ChannelUsername: target},
+					File:     file,
+				},
+			}
+		} else {
+			chatID, err := strconv.ParseInt(target, 10, 64)
+			if err != nil {
+				return fmt.Errorf("telegram target must be @username or chat_id")
+			}
+			document = tgbotapi.NewDocument(chatID, file)
 		}
 		document.Caption = caption
 		document.ParseMode = parseMode
 		if replyTo > 0 {
 			document.ReplyToMessageID = replyTo
 		}
-		_, err = bot.Send(document)
-		return err
+		_, sendErr := bot.Send(document)
+		return sendErr
 	case channel.AttachmentAudio:
 		audio, err := buildTelegramAudio(target, file)
 		if err != nil {

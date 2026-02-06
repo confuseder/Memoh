@@ -7,6 +7,7 @@ import (
 	"github.com/memohai/memoh/internal/channel"
 )
 
+// Config holds the Feishu app credentials extracted from a channel configuration.
 type Config struct {
 	AppID             string
 	AppSecret         string
@@ -14,11 +15,13 @@ type Config struct {
 	VerificationToken string
 }
 
+// UserConfig holds the identifiers used to target a Feishu user.
 type UserConfig struct {
 	OpenID string
 	UserID string
 }
 
+// NormalizeConfig validates and normalizes a Feishu channel configuration map.
 func NormalizeConfig(raw map[string]any) (map[string]any, error) {
 	cfg, err := parseConfig(raw)
 	if err != nil {
@@ -37,6 +40,7 @@ func NormalizeConfig(raw map[string]any) (map[string]any, error) {
 	return result, nil
 }
 
+// NormalizeUserConfig validates and normalizes a Feishu user-binding configuration map.
 func NormalizeUserConfig(raw map[string]any) (map[string]any, error) {
 	cfg, err := parseUserConfig(raw)
 	if err != nil {
@@ -52,6 +56,7 @@ func NormalizeUserConfig(raw map[string]any) (map[string]any, error) {
 	return result, nil
 }
 
+// ResolveTarget derives a Feishu delivery target from a user-binding configuration.
 func ResolveTarget(raw map[string]any) (string, error) {
 	cfg, err := parseUserConfig(raw)
 	if err != nil {
@@ -66,6 +71,7 @@ func ResolveTarget(raw map[string]any) (string, error) {
 	return "", fmt.Errorf("feishu binding is incomplete")
 }
 
+// MatchBinding reports whether a Feishu user binding matches the given criteria.
 func MatchBinding(raw map[string]any, criteria channel.BindingCriteria) bool {
 	cfg, err := parseUserConfig(raw)
 	if err != nil {
@@ -85,6 +91,7 @@ func MatchBinding(raw map[string]any, criteria channel.BindingCriteria) bool {
 	return false
 }
 
+// BuildUserConfig constructs a Feishu user-binding config from an Identity.
 func BuildUserConfig(identity channel.Identity) map[string]any {
 	result := map[string]any{}
 	if value := strings.TrimSpace(identity.Attribute("open_id")); value != "" {
@@ -134,9 +141,6 @@ func normalizeTarget(raw string) string {
 	}
 	if strings.HasPrefix(value, "oc_") {
 		return "chat_id:" + value
-	}
-	if strings.HasPrefix(value, "user_id:") {
-		return value
 	}
 	return "open_id:" + value
 }

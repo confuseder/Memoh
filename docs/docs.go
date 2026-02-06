@@ -241,6 +241,41 @@ const docTemplate = `{
             }
         },
         "/bots/{bot_id}/container": {
+            "get": {
+                "tags": [
+                    "containerd"
+                ],
+                "summary": "Get container info for bot",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Bot ID",
+                        "name": "bot_id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.GetContainerResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    }
+                }
+            },
             "post": {
                 "tags": [
                     "containerd"
@@ -284,14 +319,12 @@ const docTemplate = `{
                         }
                     }
                 }
-            }
-        },
-        "/bots/{bot_id}/container/list": {
-            "get": {
+            },
+            "delete": {
                 "tags": [
                     "containerd"
                 ],
-                "summary": "List containers for bot",
+                "summary": "Delete MCP container for bot",
                 "parameters": [
                     {
                         "type": "string",
@@ -302,10 +335,13 @@ const docTemplate = `{
                     }
                 ],
                 "responses": {
-                    "200": {
-                        "description": "OK",
+                    "204": {
+                        "description": "No Content"
+                    },
+                    "404": {
+                        "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ListContainersResponse"
+                            "$ref": "#/definitions/handlers.ErrorResponse"
                         }
                     },
                     "500": {
@@ -351,7 +387,7 @@ const docTemplate = `{
                 "tags": [
                     "containerd"
                 ],
-                "summary": "Create container snapshot",
+                "summary": "Create container snapshot for bot",
                 "parameters": [
                     {
                         "type": "string",
@@ -376,16 +412,28 @@ const docTemplate = `{
                         "schema": {
                             "$ref": "#/definitions/handlers.CreateSnapshotResponse"
                         }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
                     }
                 }
             }
         },
-        "/bots/{bot_id}/container/{id}": {
-            "delete": {
+        "/bots/{bot_id}/container/start": {
+            "post": {
                 "tags": [
                     "containerd"
                 ],
-                "summary": "Delete MCP container",
+                "summary": "Start container task for bot",
                 "parameters": [
                     {
                         "type": "string",
@@ -393,23 +441,50 @@ const docTemplate = `{
                         "name": "bot_id",
                         "in": "path",
                         "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object"
+                        }
                     },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/bots/{bot_id}/container/stop": {
+            "post": {
+                "tags": [
+                    "containerd"
+                ],
+                "summary": "Stop container task for bot",
+                "parameters": [
                     {
                         "type": "string",
-                        "description": "Container ID",
-                        "name": "id",
+                        "description": "Bot ID",
+                        "name": "bot_id",
                         "in": "path",
                         "required": true
                     }
                 ],
                 "responses": {
-                    "204": {
-                        "description": "No Content"
-                    },
-                    "400": {
-                        "description": "Bad Request",
+                    "200": {
+                        "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "type": "object"
                         }
                     },
                     "404": {
@@ -4494,7 +4569,7 @@ const docTemplate = `{
                 "messages": {
                     "type": "array",
                     "items": {
-                        "$ref": "#/definitions/chat.GatewayMessage"
+                        "$ref": "#/definitions/chat.ModelMessage"
                     }
                 },
                 "model": {
@@ -4520,7 +4595,7 @@ const docTemplate = `{
                 "messages": {
                     "type": "array",
                     "items": {
-                        "$ref": "#/definitions/chat.GatewayMessage"
+                        "$ref": "#/definitions/chat.ModelMessage"
                     }
                 },
                 "model": {
@@ -4537,9 +4612,56 @@ const docTemplate = `{
                 }
             }
         },
-        "chat.GatewayMessage": {
+        "chat.ModelMessage": {
             "type": "object",
-            "additionalProperties": {}
+            "properties": {
+                "content": {
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    }
+                },
+                "name": {
+                    "type": "string"
+                },
+                "role": {
+                    "type": "string"
+                },
+                "tool_call_id": {
+                    "type": "string"
+                },
+                "tool_calls": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/chat.ToolCall"
+                    }
+                }
+            }
+        },
+        "chat.ToolCall": {
+            "type": "object",
+            "properties": {
+                "function": {
+                    "$ref": "#/definitions/chat.ToolCallFunction"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "type": {
+                    "type": "string"
+                }
+            }
+        },
+        "chat.ToolCallFunction": {
+            "type": "object",
+            "properties": {
+                "arguments": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                }
+            }
         },
         "handlers.ChannelMeta": {
             "type": "object",
@@ -4567,41 +4689,9 @@ const docTemplate = `{
                 }
             }
         },
-        "handlers.ContainerInfo": {
-            "type": "object",
-            "properties": {
-                "created_at": {
-                    "type": "string"
-                },
-                "id": {
-                    "type": "string"
-                },
-                "image": {
-                    "type": "string"
-                },
-                "labels": {
-                    "type": "object",
-                    "additionalProperties": {
-                        "type": "string"
-                    }
-                },
-                "snapshot_key": {
-                    "type": "string"
-                },
-                "snapshotter": {
-                    "type": "string"
-                },
-                "updated_at": {
-                    "type": "string"
-                }
-            }
-        },
         "handlers.CreateContainerRequest": {
             "type": "object",
             "properties": {
-                "container_id": {
-                    "type": "string"
-                },
                 "image": {
                     "type": "string"
                 },
@@ -4630,9 +4720,6 @@ const docTemplate = `{
         "handlers.CreateSnapshotRequest": {
             "type": "object",
             "properties": {
-                "container_id": {
-                    "type": "string"
-                },
                 "snapshot_name": {
                     "type": "string"
                 }
@@ -4748,14 +4835,35 @@ const docTemplate = `{
                 }
             }
         },
-        "handlers.ListContainersResponse": {
+        "handlers.GetContainerResponse": {
             "type": "object",
             "properties": {
-                "containers": {
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/definitions/handlers.ContainerInfo"
-                    }
+                "container_id": {
+                    "type": "string"
+                },
+                "container_path": {
+                    "type": "string"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "host_path": {
+                    "type": "string"
+                },
+                "image": {
+                    "type": "string"
+                },
+                "namespace": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "task_running": {
+                    "type": "boolean"
+                },
+                "updated_at": {
+                    "type": "string"
                 }
             }
         },

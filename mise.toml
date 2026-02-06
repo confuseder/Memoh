@@ -10,7 +10,7 @@ bun = "latest"
 # pnpm for workspace management
 pnpm = "10"
 # Lima for macOS
-lima = { version = "latest", platform = "darwin" }
+lima = { version = "system", platform = "darwin" }
 
 [task_config]
 dir = "{{cwd}}"

@@ -10,6 +10,7 @@ import (
 	"time"
 )
 
+// ConfigStore abstracts the persistence layer used by the Manager.
 type ConfigStore interface {
 	ResolveEffectiveConfig(ctx context.Context, botID string, channelType ChannelType) (ChannelConfig, error)
 	GetUserConfig(ctx context.Context, actorUserID string, channelType ChannelType) (ChannelUserBinding, error)
@@ -21,9 +22,10 @@ type ConfigStore interface {
 	UpsertChannelSession(ctx context.Context, sessionID string, botID string, channelConfigID string, userID string, contactID string, platform string, replyTarget string, threadID string, metadata map[string]any) error
 }
 
-// Middleware 消息处理中间件定义
+// Middleware wraps an InboundHandler to add cross-cutting behavior.
 type Middleware func(next InboundHandler) InboundHandler
 
+// Manager coordinates channel adapters, connection lifecycle, and message dispatch.
 type Manager struct {
 	service         ConfigStore
 	processor       InboundProcessor
@@ -49,6 +51,7 @@ type connectionEntry struct {
 	connection Connection
 }
 
+// NewManager creates a Manager with the given logger, config store, and inbound processor.
 func NewManager(log *slog.Logger, service ConfigStore, processor InboundProcessor) *Manager {
 	if log == nil {
 		log = slog.Default()
@@ -68,11 +71,12 @@ func NewManager(log *slog.Logger, service ConfigStore, processor InboundProcesso
 	}
 }
 
-// Use 注册中间件
+// Use appends middleware to the inbound processing chain.
 func (m *Manager) Use(mw ...Middleware) {
 	m.middlewares = append(m.middlewares, mw...)
 }
 
+// RegisterAdapter adds an adapter and indexes its Sender/Receiver capabilities.
 func (m *Manager) RegisterAdapter(adapter Adapter) {
 	if adapter == nil {
 		return
@@ -91,7 +95,7 @@ func (m *Manager) RegisterAdapter(adapter Adapter) {
 	}
 }
 
-// AddAdapter 注册适配器并触发一次刷新（便于热插拔）。
+// AddAdapter registers an adapter and triggers an immediate refresh for hot-plug support.
 func (m *Manager) AddAdapter(ctx context.Context, adapter Adapter) {
 	m.RegisterAdapter(adapter)
 	if ctx != nil {
@@ -99,7 +103,7 @@ func (m *Manager) AddAdapter(ctx context.Context, adapter Adapter) {
 	}
 }
 
-// RemoveAdapter 移除适配器并停止其连接（便于热插拔）。
+// RemoveAdapter unregisters an adapter and stops all its active connections.
 func (m *Manager) RemoveAdapter(ctx context.Context, channelType ChannelType) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -112,7 +116,9 @@ func (m *Manager) RemoveAdapter(ctx context.Context, channelType ChannelType) {
 	for id, entry := range m.connections {
 		if entry != nil && entry.config.ChannelType == normalized {
 			if entry.connection != nil {
-				_ = entry.connection.Stop(ctx)
+				if err := entry.connection.Stop(ctx); err != nil && !errors.Is(err, ErrStopNotSupported) && m.logger != nil {
+					m.logger.Warn("adapter stop failed", slog.String("config_id", id), slog.Any("error", err))
+				}
 			}
 			delete(m.connections, id)
 		}
@@ -126,6 +132,7 @@ func (m *Manager) RemoveAdapter(ctx context.Context, channelType ChannelType) {
 	m.adapterMu.Unlock()
 }
 
+// Start begins the periodic config refresh loop and inbound worker pool.
 func (m *Manager) Start(ctx context.Context) {
 	if m.logger != nil {
 		m.logger.Info("manager start")
@@ -150,6 +157,7 @@ func (m *Manager) Start(ctx context.Context) {
 	}()
 }
 
+// Send delivers an outbound message to the specified channel, resolving target and config automatically.
 func (m *Manager) Send(ctx context.Context, botID string, channelType ChannelType, req SendRequest) error {
 	if m.service == nil {
 		return fmt.Errorf("channel manager not configured")
@@ -210,20 +218,20 @@ func (m *Manager) Send(ctx context.Context, botID string, channelType ChannelTyp
 	return nil
 }
 
+// HandleInbound enqueues an inbound message for asynchronous processing by the worker pool.
 func (m *Manager) HandleInbound(ctx context.Context, cfg ChannelConfig, msg InboundMessage) error {
 	if m.processor == nil {
 		return fmt.Errorf("inbound processor not configured")
+	}
+	if ctx == nil {
+		ctx = context.Background()
 	}
 	m.startInboundWorkers(ctx)
 	if m.inboundCtx != nil && m.inboundCtx.Err() != nil {
 		return fmt.Errorf("inbound dispatcher stopped")
 	}
-	taskCtx := ctx
-	if ctx != nil {
-		taskCtx = context.WithoutCancel(ctx)
-	}
 	task := inboundTask{
-		ctx: taskCtx,
+		ctx: context.WithoutCancel(ctx),
 		cfg: cfg,
 		msg: msg,
 	}
@@ -282,7 +290,9 @@ func (m *Manager) reconcile(ctx context.Context, configs []ChannelConfig) {
 			if m.logger != nil {
 				m.logger.Info("adapter stop", slog.String("channel", entry.config.ChannelType.String()), slog.String("config_id", id))
 			}
-			_ = entry.connection.Stop(ctx)
+			if err := entry.connection.Stop(ctx); err != nil && !errors.Is(err, ErrStopNotSupported) && m.logger != nil {
+				m.logger.Warn("adapter stop failed", slog.String("config_id", id), slog.Any("error", err))
+			}
 		}
 		delete(m.connections, id)
 	}
@@ -295,14 +305,15 @@ func (m *Manager) ensureConnection(ctx context.Context, cfg ChannelConfig) error
 	if receiver == nil {
 		return nil
 	}
+
 	m.mu.Lock()
 	entry := m.connections[cfg.ID]
-	m.mu.Unlock()
-
+	if entry != nil && !entry.config.UpdatedAt.Before(cfg.UpdatedAt) {
+		m.mu.Unlock()
+		return nil
+	}
 	if entry != nil {
-		if entry.config.UpdatedAt.Equal(cfg.UpdatedAt) {
-			return nil
-		}
+		m.mu.Unlock()
 		if m.logger != nil {
 			m.logger.Info("adapter restart", slog.String("channel", cfg.ChannelType.String()), slog.String("config_id", cfg.ID))
 		}
@@ -318,17 +329,17 @@ func (m *Manager) ensureConnection(ctx context.Context, cfg ChannelConfig) error
 		m.mu.Lock()
 		delete(m.connections, cfg.ID)
 		m.mu.Unlock()
+	} else {
+		m.mu.Unlock()
 	}
+
 	if m.logger != nil {
 		m.logger.Info("adapter start", slog.String("channel", cfg.ChannelType.String()), slog.String("config_id", cfg.ID))
 	}
-
-	// 包装中间件
 	handler := m.handleInbound
 	for i := len(m.middlewares) - 1; i >= 0; i-- {
 		handler = m.middlewares[i](handler)
 	}
-
 	conn, err := receiver.Connect(ctx, cfg, handler)
 	if err != nil {
 		return err
@@ -350,7 +361,9 @@ func (m *Manager) stopAll(ctx context.Context) {
 			if m.logger != nil {
 				m.logger.Info("adapter stop", slog.String("channel", entry.config.ChannelType.String()), slog.String("config_id", id))
 			}
-			_ = entry.connection.Stop(ctx)
+			if err := entry.connection.Stop(ctx); err != nil && !errors.Is(err, ErrStopNotSupported) && m.logger != nil {
+				m.logger.Warn("adapter stop failed", slog.String("config_id", id), slog.Any("error", err))
+			}
 		}
 		delete(m.connections, id)
 	}
@@ -370,6 +383,7 @@ func (m *Manager) handleInbound(ctx context.Context, cfg ChannelConfig, msg Inbo
 	return nil
 }
 
+// Stop terminates the connection identified by the given config ID.
 func (m *Manager) Stop(ctx context.Context, configID string) error {
 	configID = strings.TrimSpace(configID)
 	if configID == "" {
@@ -384,6 +398,7 @@ func (m *Manager) Stop(ctx context.Context, configID string) error {
 	return entry.connection.Stop(ctx)
 }
 
+// StopByBot terminates all connections belonging to the given bot.
 func (m *Manager) StopByBot(ctx context.Context, botID string) error {
 	botID = strings.TrimSpace(botID)
 	if botID == "" {
@@ -402,6 +417,7 @@ func (m *Manager) StopByBot(ctx context.Context, botID string) error {
 	return nil
 }
 
+// Shutdown cancels the inbound worker pool and stops all active connections.
 func (m *Manager) Shutdown(ctx context.Context) error {
 	if m.inboundCancel != nil {
 		m.inboundCancel()
@@ -474,8 +490,9 @@ func (m *Manager) resolveOutboundPolicy(channelType ChannelType) OutboundPolicy 
 	return NormalizeOutboundPolicy(policy)
 }
 
+// buildOutboundMessages splits an outbound message into multiple messages based on the policy.
+// The caller must pass an already-normalized policy.
 func buildOutboundMessages(msg OutboundMessage, policy OutboundPolicy) ([]OutboundMessage, error) {
-	policy = NormalizeOutboundPolicy(policy)
 	if msg.Message.IsEmpty() {
 		return nil, fmt.Errorf("message is required")
 	}
@@ -551,6 +568,46 @@ func normalizeOutboundMessage(msg Message) Message {
 	return msg
 }
 
+func validateMessageCapabilities(channelType ChannelType, msg Message) error {
+	caps, ok := GetChannelCapabilities(channelType)
+	if !ok {
+		return nil
+	}
+	switch msg.Format {
+	case MessageFormatPlain:
+		if !caps.Text {
+			return fmt.Errorf("channel does not support plain text")
+		}
+	case MessageFormatMarkdown:
+		if !caps.Markdown && !caps.RichText {
+			return fmt.Errorf("channel does not support markdown")
+		}
+	case MessageFormatRich:
+		if !caps.RichText {
+			return fmt.Errorf("channel does not support rich text")
+		}
+	}
+	if len(msg.Parts) > 0 && !caps.RichText {
+		return fmt.Errorf("channel does not support rich text")
+	}
+	if len(msg.Attachments) > 0 && !caps.Attachments {
+		return fmt.Errorf("channel does not support attachments")
+	}
+	if len(msg.Attachments) > 0 && requiresMedia(msg.Attachments) && !caps.Media {
+		return fmt.Errorf("channel does not support media")
+	}
+	if len(msg.Actions) > 0 && !caps.Buttons {
+		return fmt.Errorf("channel does not support actions")
+	}
+	if msg.Thread != nil && !caps.Threads {
+		return fmt.Errorf("channel does not support threads")
+	}
+	if msg.Reply != nil && !caps.Reply {
+		return fmt.Errorf("channel does not support reply")
+	}
+	return nil
+}
+
 func (m *Manager) sendWithConfig(ctx context.Context, sender Sender, cfg ChannelConfig, msg OutboundMessage, policy OutboundPolicy) error {
 	if sender == nil {
 		return fmt.Errorf("unsupported channel type: %s", cfg.ChannelType)
@@ -562,36 +619,9 @@ func (m *Manager) sendWithConfig(ctx context.Context, sender Sender, cfg Channel
 	if msg.Message.IsEmpty() {
 		return fmt.Errorf("message is required")
 	}
-	if caps, ok := GetChannelCapabilities(cfg.ChannelType); ok {
-		if msg.Message.Format == MessageFormatPlain && !caps.Text {
-			return fmt.Errorf("channel does not support plain text")
-		}
-		if msg.Message.Format == MessageFormatMarkdown && !(caps.Markdown || caps.RichText) {
-			return fmt.Errorf("channel does not support markdown")
-		}
-		if msg.Message.Format == MessageFormatRich && !caps.RichText {
-			return fmt.Errorf("channel does not support rich text")
-		}
-		if len(msg.Message.Parts) > 0 && !caps.RichText {
-			return fmt.Errorf("channel does not support rich text")
-		}
-		if len(msg.Message.Attachments) > 0 && !caps.Attachments {
-			return fmt.Errorf("channel does not support attachments")
-		}
-		if len(msg.Message.Attachments) > 0 && requiresMedia(msg.Message.Attachments) && !caps.Media {
-			return fmt.Errorf("channel does not support media")
-		}
-		if len(msg.Message.Actions) > 0 && !caps.Buttons {
-			return fmt.Errorf("channel does not support actions")
-		}
-		if msg.Message.Thread != nil && !caps.Threads {
-			return fmt.Errorf("channel does not support threads")
-		}
-		if msg.Message.Reply != nil && !caps.Reply {
-			return fmt.Errorf("channel does not support reply")
-		}
+	if err := validateMessageCapabilities(cfg.ChannelType, msg.Message); err != nil {
+		return err
 	}
-	policy = NormalizeOutboundPolicy(policy)
 	var lastErr error
 	for i := 0; i < policy.RetryMax; i++ {
 		err := sender.Send(ctx, cfg, OutboundMessage{Target: target, Message: msg.Message})

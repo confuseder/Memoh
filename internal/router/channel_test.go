@@ -129,8 +129,8 @@ func TestChannelInboundProcessorBoundUser(t *testing.T) {
 	}
 	gateway := &fakeChatGateway{
 		resp: chat.ChatResponse{
-			Messages: []chat.GatewayMessage{
-				{"role": "assistant", "content": "AI回复内容"},
+			Messages: []chat.ModelMessage{
+				{Role: "assistant", Content: chat.NewTextContent("AI回复内容")},
 			},
 		},
 	}
@@ -218,8 +218,8 @@ func TestChannelInboundProcessorSilentReply(t *testing.T) {
 	}
 	gateway := &fakeChatGateway{
 		resp: chat.ChatResponse{
-			Messages: []chat.GatewayMessage{
-				{"role": "assistant", "content": "NO_REPLY"},
+			Messages: []chat.ModelMessage{
+				{Role: "assistant", Content: chat.NewTextContent("NO_REPLY")},
 			},
 		},
 	}
@@ -255,20 +255,20 @@ func TestChannelInboundProcessorSuppressOnToolSend(t *testing.T) {
 	}
 	gateway := &fakeChatGateway{
 		resp: chat.ChatResponse{
-			Messages: []chat.GatewayMessage{
+			Messages: []chat.ModelMessage{
 				{
-					"role": "assistant",
-					"tool_calls": []any{
-						map[string]any{
-							"type": "function",
-							"function": map[string]any{
-								"name":      "send_message",
-								"arguments": `{"platform":"feishu","target":"target-id","message":{"text":"AI回复内容"}}`,
+					Role: "assistant",
+					ToolCalls: []chat.ToolCall{
+						{
+							Type: "function",
+							Function: chat.ToolCallFunction{
+								Name:      "send_message",
+								Arguments: `{"platform":"feishu","target":"target-id","message":{"text":"AI回复内容"}}`,
 							},
 						},
 					},
 				},
-				{"role": "assistant", "content": "AI回复内容"},
+				{Role: "assistant", Content: chat.NewTextContent("AI回复内容")},
 			},
 		},
 	}
@@ -304,20 +304,20 @@ func TestChannelInboundProcessorDedupeWithToolSend(t *testing.T) {
 	}
 	gateway := &fakeChatGateway{
 		resp: chat.ChatResponse{
-			Messages: []chat.GatewayMessage{
+			Messages: []chat.ModelMessage{
 				{
-					"role": "assistant",
-					"tool_calls": []any{
-						map[string]any{
-							"type": "function",
-							"function": map[string]any{
-								"name":      "send_message",
-								"arguments": `{"platform":"feishu","target":"other-target","message":{"text":"AI回复内容"}}`,
+					Role: "assistant",
+					ToolCalls: []chat.ToolCall{
+						{
+							Type: "function",
+							Function: chat.ToolCallFunction{
+								Name:      "send_message",
+								Arguments: `{"platform":"feishu","target":"other-target","message":{"text":"AI回复内容"}}`,
 							},
 						},
 					},
 				},
-				{"role": "assistant", "content": "AI回复内容"},
+				{Role: "assistant", Content: chat.NewTextContent("AI回复内容")},
 			},
 		},
 	}

@@ -50,9 +50,10 @@ func (h *ContainerdHandler) HandleMCPFS(c echo.Context) error {
 	if err != nil {
 		return err
 	}
-	containerID := strings.TrimSpace(c.Param("id"))
-	if containerID == "" {
-		return echo.NewHTTPError(http.StatusBadRequest, "container id is required")
+	ctx := c.Request().Context()
+	containerID, err := h.botContainerID(ctx, botID)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusNotFound, "container not found for bot")
 	}
 
 	var req mcptools.JSONRPCRequest

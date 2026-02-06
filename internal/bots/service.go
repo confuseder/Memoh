@@ -17,8 +17,9 @@ import (
 )
 
 type Service struct {
-	queries *sqlc.Queries
-	logger  *slog.Logger
+	queries            *sqlc.Queries
+	logger             *slog.Logger
+	containerLifecycle ContainerLifecycle
 }
 
 var (
@@ -38,6 +39,11 @@ func NewService(log *slog.Logger, queries *sqlc.Queries) *Service {
 		queries: queries,
 		logger:  log.With(slog.String("service", "bots")),
 	}
+}
+
+// SetContainerLifecycle registers a container lifecycle handler for bot operations.
+func (s *Service) SetContainerLifecycle(lc ContainerLifecycle) {
+	s.containerLifecycle = lc
 }
 
 func (s *Service) AuthorizeAccess(ctx context.Context, actorID, botID string, isAdmin bool, policy AccessPolicy) (Bot, error) {
@@ -278,6 +284,14 @@ func (s *Service) Delete(ctx context.Context, botID string) error {
 	}
 	if _, err := s.queries.GetBotByID(ctx, botUUID); err != nil {
 		return err
+	}
+	if s.containerLifecycle != nil {
+		if err := s.containerLifecycle.CleanupBotContainer(ctx, botID); err != nil {
+			s.logger.Error("failed to cleanup bot container",
+				slog.String("bot_id", botID),
+				slog.Any("error", err),
+			)
+		}
 	}
 	return s.queries.DeleteBotByID(ctx, botUUID)
 }

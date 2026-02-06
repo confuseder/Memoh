@@ -1,5 +1,6 @@
 package channel
 
+// FieldType enumerates the supported configuration field types.
 type FieldType string
 
 const (
@@ -10,7 +11,7 @@ const (
 	FieldEnum   FieldType = "enum"
 )
 
-// FieldSchema 定义单个配置字段的结构化描述。
+// FieldSchema describes a single configuration field.
 type FieldSchema struct {
 	Type        FieldType `json:"type"`
 	Required    bool      `json:"required"`
@@ -20,7 +21,7 @@ type FieldSchema struct {
 	Example     any       `json:"example,omitempty"`
 }
 
-// ConfigSchema 描述通道配置或用户绑定的结构。
+// ConfigSchema describes the structure of a channel or user-binding configuration.
 type ConfigSchema struct {
 	Version int                    `json:"version"`
 	Fields  map[string]FieldSchema `json:"fields"`

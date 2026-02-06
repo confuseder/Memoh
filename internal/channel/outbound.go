@@ -2,6 +2,7 @@ package channel
 
 import "strings"
 
+// ChunkerMode selects the text chunking strategy.
 type ChunkerMode string
 
 const (
@@ -9,6 +10,7 @@ const (
 	ChunkerModeMarkdown ChunkerMode = "markdown"
 )
 
+// OutboundOrder controls the delivery order of text and media messages.
 type OutboundOrder string
 
 const (
@@ -16,8 +18,10 @@ const (
 	OutboundOrderTextFirst  OutboundOrder = "text_first"
 )
 
+// Chunker splits text into pieces that respect a character limit.
 type Chunker func(text string, limit int) []string
 
+// OutboundPolicy configures how outbound messages are chunked, ordered, and retried.
 type OutboundPolicy struct {
 	TextChunkLimit int           `json:"text_chunk_limit,omitempty"`
 	ChunkerMode    ChunkerMode   `json:"chunker_mode,omitempty"`
@@ -27,6 +31,7 @@ type OutboundPolicy struct {
 	RetryBackoffMs int           `json:"retry_backoff_ms,omitempty"`
 }
 
+// NormalizeOutboundPolicy fills zero-value fields with sensible defaults.
 func NormalizeOutboundPolicy(policy OutboundPolicy) OutboundPolicy {
 	if policy.TextChunkLimit <= 0 {
 		policy.TextChunkLimit = 2000
@@ -49,6 +54,7 @@ func NormalizeOutboundPolicy(policy OutboundPolicy) OutboundPolicy {
 	return policy
 }
 
+// DefaultChunker returns the built-in Chunker for the given mode.
 func DefaultChunker(mode ChunkerMode) Chunker {
 	switch mode {
 	case ChunkerModeMarkdown:
@@ -58,6 +64,7 @@ func DefaultChunker(mode ChunkerMode) Chunker {
 	}
 }
 
+// ChunkText splits text at newline boundaries, respecting the rune limit.
 func ChunkText(text string, limit int) []string {
 	trimmed := strings.TrimSpace(text)
 	if trimmed == "" {
@@ -99,6 +106,7 @@ func ChunkText(text string, limit int) []string {
 	return chunks
 }
 
+// ChunkMarkdownText splits text at paragraph boundaries (double newlines), respecting the rune limit.
 func ChunkMarkdownText(text string, limit int) []string {
 	trimmed := strings.TrimSpace(text)
 	if trimmed == "" {

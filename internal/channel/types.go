@@ -1,3 +1,5 @@
+// Package channel provides a unified abstraction for multi-platform messaging channels.
+// It defines types, interfaces, and a registry for channel adapters such as Telegram and Feishu.
 package channel
 
 import (
@@ -6,8 +8,10 @@ import (
 	"time"
 )
 
+// ChannelType identifies a messaging platform (e.g., "telegram", "feishu").
 type ChannelType string
 
+// ParseChannelType validates and normalizes a raw string into a registered ChannelType.
 func ParseChannelType(raw string) (ChannelType, error) {
 	normalized := normalizeChannelType(raw)
 	if normalized == "" {
@@ -19,12 +23,14 @@ func ParseChannelType(raw string) (ChannelType, error) {
 	return normalized, nil
 }
 
+// Identity represents a sender's identity on a channel.
 type Identity struct {
 	ExternalID  string
 	DisplayName string
 	Attributes  map[string]string
 }
 
+// Attribute returns the trimmed value for the given key, or empty string if absent.
 func (i Identity) Attribute(key string) string {
 	if i.Attributes == nil {
 		return ""
@@ -32,6 +38,7 @@ func (i Identity) Attribute(key string) string {
 	return strings.TrimSpace(i.Attributes[key])
 }
 
+// Conversation holds metadata about the chat or group context.
 type Conversation struct {
 	ID       string
 	Type     string
@@ -40,6 +47,7 @@ type Conversation struct {
 	Metadata map[string]any
 }
 
+// InboundMessage is a message received from an external channel.
 type InboundMessage struct {
 	Channel      ChannelType
 	Message      Message
@@ -53,7 +61,8 @@ type InboundMessage struct {
 	Metadata     map[string]any
 }
 
-// SessionID 结构: platform:bot_id:conversation_id[:sender_id]
+// SessionID returns a stable identifier for the conversation session.
+// Format: platform:bot_id:conversation_id[:sender_id].
 func (m InboundMessage) SessionID() string {
 	if strings.TrimSpace(m.SessionKey) != "" {
 		return strings.TrimSpace(m.SessionKey)
@@ -65,10 +74,10 @@ func (m InboundMessage) SessionID() string {
 	return GenerateSessionID(string(m.Channel), m.BotID, m.Conversation.ID, m.Conversation.Type, senderID)
 }
 
-// GenerateSessionID 统一生成 SessionID 的逻辑
+// GenerateSessionID builds a session identifier from platform, bot, conversation, and sender info.
+// For group chats, the sender ID is appended to provide per-user context.
 func GenerateSessionID(platform, botID, conversationID, conversationType, senderID string) string {
 	parts := []string{platform, botID, conversationID}
-	// 如果是群聊，增加发送者 ID 以支持个人上下文
 	ct := strings.ToLower(strings.TrimSpace(conversationType))
 	if ct != "" && ct != "p2p" && ct != "private" {
 		senderID = strings.TrimSpace(senderID)
@@ -79,11 +88,13 @@ func GenerateSessionID(platform, botID, conversationID, conversationType, sender
 	return strings.Join(parts, ":")
 }
 
+// OutboundMessage pairs a delivery target with the message content.
 type OutboundMessage struct {
 	Target  string  `json:"target"`
 	Message Message `json:"message"`
 }
 
+// MessageFormat indicates how the message text should be rendered.
 type MessageFormat string
 
 const (
@@ -92,6 +103,7 @@ const (
 	MessageFormatRich     MessageFormat = "rich"
 )
 
+// MessagePartType identifies the kind of a rich-text message part.
 type MessagePartType string
 
 const (
@@ -102,6 +114,7 @@ const (
 	MessagePartEmoji     MessagePartType = "emoji"
 )
 
+// MessageTextStyle describes inline formatting for a text part.
 type MessageTextStyle string
 
 const (
@@ -111,6 +124,7 @@ const (
 	MessageStyleCode          MessageTextStyle = "code"
 )
 
+// MessagePart is a single element within a rich-text message.
 type MessagePart struct {
 	Type     MessagePartType    `json:"type"`
 	Text     string             `json:"text,omitempty"`
@@ -122,6 +136,7 @@ type MessagePart struct {
 	Metadata map[string]any     `json:"metadata,omitempty"`
 }
 
+// AttachmentType classifies the kind of binary attachment.
 type AttachmentType string
 
 const (
@@ -133,6 +148,7 @@ const (
 	AttachmentGIF   AttachmentType = "gif"
 )
 
+// Attachment represents a binary file attached to a message.
 type Attachment struct {
 	Type         AttachmentType `json:"type"`
 	URL          string         `json:"url,omitempty"`
@@ -147,6 +163,7 @@ type Attachment struct {
 	Metadata     map[string]any `json:"metadata,omitempty"`
 }
 
+// Action describes an interactive button or link in a message.
 type Action struct {
 	Type  string `json:"type"`
 	Label string `json:"label,omitempty"`
@@ -154,15 +171,18 @@ type Action struct {
 	URL   string `json:"url,omitempty"`
 }
 
+// ThreadRef references a conversation thread by ID.
 type ThreadRef struct {
 	ID string `json:"id"`
 }
 
+// ReplyRef points to a message being replied to.
 type ReplyRef struct {
 	Target    string `json:"target,omitempty"`
 	MessageID string `json:"message_id,omitempty"`
 }
 
+// Message is the unified message structure used across all channels.
 type Message struct {
 	ID          string         `json:"id,omitempty"`
 	Format      MessageFormat  `json:"format,omitempty"`
@@ -175,6 +195,7 @@ type Message struct {
 	Metadata    map[string]any `json:"metadata,omitempty"`
 }
 
+// IsEmpty reports whether the message carries no content.
 func (m Message) IsEmpty() bool {
 	return strings.TrimSpace(m.Text) == "" &&
 		len(m.Parts) == 0 &&
@@ -182,6 +203,7 @@ func (m Message) IsEmpty() bool {
 		len(m.Actions) == 0
 }
 
+// PlainText extracts the plain text representation of the message.
 func (m Message) PlainText() string {
 	if strings.TrimSpace(m.Text) != "" {
 		return strings.TrimSpace(m.Text)
@@ -211,11 +233,13 @@ func (m Message) PlainText() string {
 	return strings.Join(lines, "\n")
 }
 
+// BindingCriteria specifies conditions for matching a user-channel binding.
 type BindingCriteria struct {
 	ExternalID string
 	Attributes map[string]string
 }
 
+// Attribute returns the trimmed value for the given key, or empty string if absent.
 func (c BindingCriteria) Attribute(key string) string {
 	if c.Attributes == nil {
 		return ""
@@ -223,6 +247,7 @@ func (c BindingCriteria) Attribute(key string) string {
 	return strings.TrimSpace(c.Attributes[key])
 }
 
+// BindingCriteriaFromIdentity creates BindingCriteria from a channel Identity.
 func BindingCriteriaFromIdentity(identity Identity) BindingCriteria {
 	return BindingCriteria{
 		ExternalID: strings.TrimSpace(identity.ExternalID),
@@ -230,6 +255,7 @@ func BindingCriteriaFromIdentity(identity Identity) BindingCriteria {
 	}
 }
 
+// ChannelConfig holds the configuration for a bot's channel integration.
 type ChannelConfig struct {
 	ID               string
 	BotID            string
@@ -238,13 +264,13 @@ type ChannelConfig struct {
 	ExternalIdentity string
 	SelfIdentity     map[string]any
 	Routing          map[string]any
-	Capabilities     map[string]any
 	Status           string
 	VerifiedAt       time.Time
 	CreatedAt        time.Time
 	UpdatedAt        time.Time
 }
 
+// ChannelUserBinding represents a user's binding to a specific channel type.
 type ChannelUserBinding struct {
 	ID          string
 	ChannelType ChannelType
@@ -254,20 +280,22 @@ type ChannelUserBinding struct {
 	UpdatedAt   time.Time
 }
 
+// UpsertConfigRequest is the input for creating or updating a channel configuration.
 type UpsertConfigRequest struct {
 	Credentials      map[string]any `json:"credentials"`
 	ExternalIdentity string         `json:"external_identity,omitempty"`
 	SelfIdentity     map[string]any `json:"self_identity,omitempty"`
 	Routing          map[string]any `json:"routing,omitempty"`
-	Capabilities     map[string]any `json:"capabilities,omitempty"`
 	Status           string         `json:"status,omitempty"`
 	VerifiedAt       *time.Time     `json:"verified_at,omitempty"`
 }
 
+// UpsertUserConfigRequest is the input for creating or updating a user-channel binding.
 type UpsertUserConfigRequest struct {
 	Config map[string]any `json:"config"`
 }
 
+// ChannelSession tracks an active conversation session on a channel.
 type ChannelSession struct {
 	SessionID       string
 	BotID           string
@@ -282,6 +310,7 @@ type ChannelSession struct {
 	UpdatedAt       time.Time
 }
 
+// SendRequest is the input for sending an outbound message through a channel.
 type SendRequest struct {
 	Target  string  `json:"target,omitempty"`
 	UserID  string  `json:"user_id,omitempty"`

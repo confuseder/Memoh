@@ -352,29 +352,23 @@ type sendMessageToolArgs struct {
 	Message  *channel.Message `json:"message"`
 }
 
-type toolCall struct {
-	Name      string
-	Arguments string
-}
-
-func collectMessageToolContext(messages []chat.GatewayMessage, channelType channel.ChannelType, replyTarget string) ([]string, bool) {
+func collectMessageToolContext(messages []chat.ModelMessage, channelType channel.ChannelType, replyTarget string) ([]string, bool) {
 	if len(messages) == 0 {
 		return nil, false
 	}
-	sentTexts := make([]string, 0)
+	var sentTexts []string
 	suppressReplies := false
 	for _, msg := range messages {
-		for _, call := range extractToolCalls(msg) {
-			if call.Name != "send_message" {
+		for _, tc := range msg.ToolCalls {
+			if tc.Function.Name != "send_message" {
 				continue
 			}
 			var args sendMessageToolArgs
-			if !parseToolArguments(call.Arguments, &args) {
+			if !parseToolArguments(tc.Function.Arguments, &args) {
 				continue
 			}
-			messageText := strings.TrimSpace(extractSendMessageText(args))
-			if messageText != "" {
-				sentTexts = append(sentTexts, messageText)
+			if text := strings.TrimSpace(extractSendMessageText(args)); text != "" {
+				sentTexts = append(sentTexts, text)
 			}
 			if shouldSuppressForToolCall(args, channelType, replyTarget) {
 				suppressReplies = true
@@ -382,60 +376,6 @@ func collectMessageToolContext(messages []chat.GatewayMessage, channelType chann
 		}
 	}
 	return sentTexts, suppressReplies
-}
-
-func extractToolCalls(msg chat.GatewayMessage) []toolCall {
-	calls := make([]toolCall, 0)
-	if msg == nil {
-		return calls
-	}
-	if rawCalls, ok := msg["tool_calls"].([]any); ok {
-		for _, raw := range rawCalls {
-			call, ok := raw.(map[string]any)
-			if !ok {
-				continue
-			}
-			name, args := parseToolCall(call)
-			if name == "" {
-				continue
-			}
-			calls = append(calls, toolCall{Name: name, Arguments: args})
-		}
-	}
-	if fn, ok := msg["function_call"].(map[string]any); ok {
-		name := readString(fn["name"])
-		args := readString(fn["arguments"])
-		if name != "" {
-			calls = append(calls, toolCall{Name: name, Arguments: args})
-		}
-	}
-	if fn, ok := msg["functionCall"].(map[string]any); ok {
-		name := readString(fn["name"])
-		args := readString(fn["arguments"])
-		if name != "" {
-			calls = append(calls, toolCall{Name: name, Arguments: args})
-		}
-	}
-	return calls
-}
-
-func parseToolCall(call map[string]any) (string, string) {
-	if call == nil {
-		return "", ""
-	}
-	name := ""
-	args := ""
-	if fn, ok := call["function"].(map[string]any); ok {
-		name = readString(fn["name"])
-		args = readString(fn["arguments"])
-	}
-	if name == "" {
-		name = readString(call["name"])
-	}
-	if args == "" {
-		args = readString(call["arguments"])
-	}
-	return name, args
 }
 
 func parseToolArguments(raw string, out any) bool {
@@ -578,12 +518,6 @@ func isMessagingToolDuplicate(text string, sentTexts []string) bool {
 	return false
 }
 
-func readString(value any) string {
-	if raw, ok := value.(string); ok {
-		return raw
-	}
-	return ""
-}
 
 func (p *ChannelInboundProcessor) requireIdentity(ctx context.Context, cfg channel.ChannelConfig, msg channel.InboundMessage) (IdentityState, error) {
 	if state, ok := IdentityStateFromContext(ctx); ok {

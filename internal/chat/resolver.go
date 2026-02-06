@@ -18,6 +18,7 @@ import (
 	"github.com/memohai/memoh/internal/history"
 	"github.com/memohai/memoh/internal/memory"
 	"github.com/memohai/memoh/internal/models"
+	"github.com/memohai/memoh/internal/schedule"
 	"github.com/memohai/memoh/internal/settings"
 )
 
@@ -37,15 +38,17 @@ type Resolver struct {
 	streamingClient *http.Client
 }
 
-type userSettings struct {
-	ChatModelID        string
-	MemoryModelID      string
-	EmbeddingModelID   string
-	MaxContextLoadTime int
-	Language           string
-}
-
-func NewResolver(log *slog.Logger, modelsService *models.Service, queries *sqlc.Queries, memoryService *memory.Service, historyService *history.Service, settingsService *settings.Service, gatewayBaseURL string, timeout time.Duration) *Resolver {
+// NewResolver creates a Resolver that communicates with the agent gateway.
+func NewResolver(
+	log *slog.Logger,
+	modelsService *models.Service,
+	queries *sqlc.Queries,
+	memoryService *memory.Service,
+	historyService *history.Service,
+	settingsService *settings.Service,
+	gatewayBaseURL string,
+	timeout time.Duration,
+) *Resolver {
 	if strings.TrimSpace(gatewayBaseURL) == "" {
 		gatewayBaseURL = "http://127.0.0.1:8081"
 	}
@@ -62,14 +65,12 @@ func NewResolver(log *slog.Logger, modelsService *models.Service, queries *sqlc.
 		gatewayBaseURL:  gatewayBaseURL,
 		timeout:         timeout,
 		logger:          log.With(slog.String("service", "chat")),
-		httpClient: &http.Client{
-			Timeout: timeout,
-		},
+		httpClient:      &http.Client{Timeout: timeout},
 		streamingClient: &http.Client{},
 	}
 }
 
-// ---------- gateway payload types ----------
+// --- gateway payload ---
 
 type gatewayModelConfig struct {
 	ModelID    string   `json:"modelId"`
@@ -92,83 +93,82 @@ type gatewayIdentity struct {
 	SessionToken    string `json:"sessionToken,omitempty"`
 }
 
-type agentGatewayRequest struct {
+type gatewayRequest struct {
 	Model             gatewayModelConfig `json:"model"`
 	ActiveContextTime int                `json:"activeContextTime"`
 	Channels          []string           `json:"channels"`
 	CurrentChannel    string             `json:"currentChannel"`
 	AllowedActions    []string           `json:"allowedActions,omitempty"`
-	Messages          []GatewayMessage   `json:"messages"`
+	Messages          []ModelMessage     `json:"messages"`
 	Skills            []string           `json:"skills"`
 	Query             string             `json:"query"`
 	Identity          gatewayIdentity    `json:"identity"`
+	Attachments       []any              `json:"attachments"`
 }
 
-type agentGatewayResponse struct {
-	Messages []GatewayMessage `json:"messages"`
-	Skills   []string         `json:"skills"`
+type gatewayResponse struct {
+	Messages []ModelMessage `json:"messages"`
+	Skills   []string       `json:"skills"`
 }
 
-// ---------- Chat ----------
+// --- resolved context (shared by Chat / StreamChat / TriggerSchedule) ---
 
-func (r *Resolver) Chat(ctx context.Context, req ChatRequest) (ChatResponse, error) {
+type resolvedContext struct {
+	payload gatewayRequest
+	model   models.GetResponse
+	provider sqlc.LlmProvider
+}
+
+func (r *Resolver) resolve(ctx context.Context, req ChatRequest) (resolvedContext, error) {
 	if strings.TrimSpace(req.Query) == "" {
-		return ChatResponse{}, fmt.Errorf("query is required")
+		return resolvedContext{}, fmt.Errorf("query is required")
 	}
 	if strings.TrimSpace(req.BotID) == "" {
-		return ChatResponse{}, fmt.Errorf("bot id is required")
+		return resolvedContext{}, fmt.Errorf("bot id is required")
 	}
 	if strings.TrimSpace(req.SessionID) == "" {
-		return ChatResponse{}, fmt.Errorf("session id is required")
+		return resolvedContext{}, fmt.Errorf("session id is required")
 	}
+
 	skipHistory := req.MaxContextLoadTime < 0
 
-	settings, err := r.loadUserSettings(ctx, req.UserID)
+	userSettings, err := r.loadUserSettings(ctx, req.UserID)
 	if err != nil {
-		return ChatResponse{}, err
+		return resolvedContext{}, err
 	}
-	chatModel, provider, err := r.selectChatModel(ctx, req, settings)
+	chatModel, provider, err := r.selectChatModel(ctx, req, userSettings)
 	if err != nil {
-		return ChatResponse{}, err
+		return resolvedContext{}, err
 	}
 	clientType, err := normalizeClientType(provider.ClientType)
 	if err != nil {
-		return ChatResponse{}, err
+		return resolvedContext{}, err
 	}
 
-	maxContextLoadTime, language, err := r.loadBotSettings(ctx, req.BotID)
+	botSettings, err := r.loadBotSettings(ctx, req.BotID)
 	if err != nil {
-		return ChatResponse{}, err
+		return resolvedContext{}, err
 	}
-	if req.MaxContextLoadTime > 0 {
-		maxContextLoadTime = req.MaxContextLoadTime
-	}
-	if strings.TrimSpace(req.Language) != "" {
-		language = req.Language
-	}
+	maxCtx := coalescePositiveInt(req.MaxContextLoadTime, botSettings.MaxContextLoadTime, defaultMaxContextMinutes)
 
-	var messages []GatewayMessage
+	var messages []ModelMessage
 	var historySkills []string
 	if !skipHistory {
-		messages, err = r.loadHistoryMessages(ctx, req.BotID, req.SessionID, maxContextLoadTime)
+		messages, err = r.loadHistoryMessages(ctx, req.BotID, req.SessionID, maxCtx)
 		if err != nil {
-			return ChatResponse{}, err
+			return resolvedContext{}, err
 		}
-		historySkills, err = r.loadHistorySkills(ctx, req.BotID, req.SessionID, maxContextLoadTime)
+		historySkills, err = r.loadHistorySkills(ctx, req.BotID, req.SessionID, maxCtx)
 		if err != nil {
-			return ChatResponse{}, err
+			return resolvedContext{}, err
 		}
 	}
-	if len(req.Messages) > 0 {
-		messages = append(messages, req.Messages...)
-	}
-	messages = sanitizeGatewayMessages(messages)
-	messages = normalizeGatewayMessagesForModel(messages)
-	skills := normalizeSkills(append(historySkills, req.Skills...))
-
+	messages = append(messages, req.Messages...)
+	messages = sanitizeMessages(messages)
+	skills := dedup(append(historySkills, req.Skills...))
 	containerID := r.resolveContainerID(ctx, req.BotID, req.ContainerID)
 
-	payload := agentGatewayRequest{
+	payload := gatewayRequest{
 		Model: gatewayModelConfig{
 			ModelID:    chatModel.ModelID,
 			ClientType: clientType,
@@ -176,318 +176,179 @@ func (r *Resolver) Chat(ctx context.Context, req ChatRequest) (ChatResponse, err
 			APIKey:     provider.ApiKey,
 			BaseURL:    provider.BaseUrl,
 		},
-		ActiveContextTime: normalizeMaxContextLoad(maxContextLoadTime),
-		Channels:          req.Channels,
+		ActiveContextTime: maxCtx,
+		Channels:          nonNilStrings(req.Channels),
 		CurrentChannel:    req.CurrentChannel,
 		AllowedActions:    req.AllowedActions,
-		Messages:          messages,
-		Skills:            skills,
+		Messages:          nonNilMessages(messages),
+		Skills:            nonNilStrings(skills),
 		Query:             req.Query,
 		Identity: gatewayIdentity{
 			BotID:           req.BotID,
 			SessionID:       req.SessionID,
 			ContainerID:     containerID,
-			ContactID:       defaultString(req.ContactID, req.UserID, req.BotID),
-			ContactName:     defaultString(req.ContactName, "User"),
+			ContactID:       firstNonEmpty(req.ContactID, req.UserID, req.BotID),
+			ContactName:     firstNonEmpty(req.ContactName, "User"),
 			ContactAlias:    req.ContactAlias,
 			UserID:          req.UserID,
 			CurrentPlatform: req.CurrentChannel,
 			ReplyTarget:     req.ReplyTarget,
 			SessionToken:    req.SessionToken,
 		},
+		Attachments: []any{},
 	}
-	_ = language // language is embedded in system prompt by the gateway
 
-	resp, err := r.postChat(ctx, payload, req.Token)
+	return resolvedContext{payload: payload, model: chatModel, provider: provider}, nil
+}
+
+// --- Chat ---
+
+// Chat sends a synchronous chat request to the agent gateway and stores the result.
+func (r *Resolver) Chat(ctx context.Context, req ChatRequest) (ChatResponse, error) {
+	rc, err := r.resolve(ctx, req)
 	if err != nil {
 		return ChatResponse{}, err
 	}
-	resp.Messages = normalizeGatewayMessages(resp.Messages)
-
-	if err := r.storeHistory(ctx, req.BotID, req.SessionID, req.Query, resp.Messages, resp.Skills); err != nil {
+	resp, err := r.postChat(ctx, rc.payload, req.Token)
+	if err != nil {
 		return ChatResponse{}, err
 	}
-	if err := r.storeMemory(ctx, req.BotID, req.SessionID, req.Query, resp.Messages); err != nil {
+	if err := r.storeRound(ctx, req.BotID, req.SessionID, req.Query, resp.Messages, resp.Skills); err != nil {
 		return ChatResponse{}, err
 	}
-
 	return ChatResponse{
 		Messages: resp.Messages,
 		Skills:   resp.Skills,
-		Model:    chatModel.ModelID,
-		Provider: provider.ClientType,
+		Model:    rc.model.ModelID,
+		Provider: rc.provider.ClientType,
 	}, nil
 }
 
-// ---------- TriggerSchedule ----------
+// --- TriggerSchedule ---
 
-func (r *Resolver) TriggerSchedule(ctx context.Context, botID string, schedule SchedulePayload, token string) error {
+// TriggerSchedule executes a scheduled command through the chat gateway.
+func (r *Resolver) TriggerSchedule(ctx context.Context, botID string, payload schedule.TriggerPayload, token string) error {
 	if strings.TrimSpace(botID) == "" {
 		return fmt.Errorf("bot id is required")
 	}
-	if strings.TrimSpace(schedule.Command) == "" {
+	if strings.TrimSpace(payload.Command) == "" {
 		return fmt.Errorf("schedule command is required")
 	}
-
 	req := ChatRequest{
 		BotID:     botID,
-		SessionID: "schedule:" + schedule.ID,
-		Query:     schedule.Command,
+		SessionID: "schedule:" + payload.ID,
+		Query:     payload.Command,
+		Token:     token,
 	}
-	settings, err := r.loadUserSettings(ctx, "")
+	rc, err := r.resolve(ctx, req)
 	if err != nil {
 		return err
 	}
-	chatModel, provider, err := r.selectChatModel(ctx, req, settings)
-	if err != nil {
-		return err
-	}
-	clientType, err := normalizeClientType(provider.ClientType)
-	if err != nil {
-		return err
-	}
+	rc.payload.Identity.ContactID = botID
+	rc.payload.Identity.ContactName = "Scheduler"
 
-	maxContextLoadTime, _, err := r.loadBotSettings(ctx, botID)
+	resp, err := r.postChat(ctx, rc.payload, token)
 	if err != nil {
 		return err
 	}
-
-	messages, err := r.loadHistoryMessages(ctx, botID, req.SessionID, maxContextLoadTime)
-	if err != nil {
-		return err
-	}
-	historySkills, err := r.loadHistorySkills(ctx, botID, req.SessionID, maxContextLoadTime)
-	if err != nil {
-		return err
-	}
-	skills := normalizeSkills(historySkills)
-	containerID := r.resolveContainerID(ctx, botID, "")
-
-	payload := agentGatewayRequest{
-		Model: gatewayModelConfig{
-			ModelID:    chatModel.ModelID,
-			ClientType: clientType,
-			Input:      chatModel.Input,
-			APIKey:     provider.ApiKey,
-			BaseURL:    provider.BaseUrl,
-		},
-		ActiveContextTime: normalizeMaxContextLoad(maxContextLoadTime),
-		Messages:          messages,
-		Skills:            skills,
-		Query:             schedule.Command,
-		Identity: gatewayIdentity{
-			BotID:       botID,
-			SessionID:   req.SessionID,
-			ContainerID: containerID,
-			ContactID:   botID,
-			ContactName: "Scheduler",
-		},
-	}
-
-	resp, err := r.postChat(ctx, payload, token)
-	if err != nil {
-		return err
-	}
-	resp.Messages = normalizeGatewayMessages(resp.Messages)
-	if err := r.storeHistory(ctx, botID, req.SessionID, schedule.Command, resp.Messages, resp.Skills); err != nil {
-		return err
-	}
-	if err := r.storeMemory(ctx, botID, req.SessionID, schedule.Command, resp.Messages); err != nil {
-		return err
-	}
-	return nil
+	return r.storeRound(ctx, botID, req.SessionID, payload.Command, resp.Messages, resp.Skills)
 }
 
-// ---------- StreamChat ----------
+// --- StreamChat ---
 
+// StreamChat sends a streaming chat request to the agent gateway.
 func (r *Resolver) StreamChat(ctx context.Context, req ChatRequest) (<-chan StreamChunk, <-chan error) {
-	chunkChan := make(chan StreamChunk)
-	errChan := make(chan error, 1)
+	chunkCh := make(chan StreamChunk)
+	errCh := make(chan error, 1)
 
 	go func() {
-		defer close(chunkChan)
-		defer close(errChan)
+		defer close(chunkCh)
+		defer close(errCh)
 
-		if strings.TrimSpace(req.Query) == "" {
-			errChan <- fmt.Errorf("query is required")
-			return
-		}
-		if strings.TrimSpace(req.BotID) == "" {
-			errChan <- fmt.Errorf("bot id is required")
-			return
-		}
-		if strings.TrimSpace(req.SessionID) == "" {
-			errChan <- fmt.Errorf("session id is required")
-			return
-		}
-		skipHistory := req.MaxContextLoadTime < 0
-
-		settings, err := r.loadUserSettings(ctx, req.UserID)
+		rc, err := r.resolve(ctx, req)
 		if err != nil {
-			errChan <- err
+			errCh <- err
 			return
 		}
-		chatModel, provider, err := r.selectChatModel(ctx, req, settings)
-		if err != nil {
-			errChan <- err
-			return
-		}
-		clientType, err := normalizeClientType(provider.ClientType)
-		if err != nil {
-			errChan <- err
-			return
-		}
-
-		maxContextLoadTime, language, err := r.loadBotSettings(ctx, req.BotID)
-		if err != nil {
-			errChan <- err
-			return
-		}
-		if req.MaxContextLoadTime > 0 {
-			maxContextLoadTime = req.MaxContextLoadTime
-		}
-		if strings.TrimSpace(req.Language) != "" {
-			language = req.Language
-		}
-
-		var messages []GatewayMessage
-		var historySkills []string
-		if !skipHistory {
-			messages, err = r.loadHistoryMessages(ctx, req.BotID, req.SessionID, maxContextLoadTime)
-			if err != nil {
-				errChan <- err
-				return
-			}
-			historySkills, err = r.loadHistorySkills(ctx, req.BotID, req.SessionID, maxContextLoadTime)
-			if err != nil {
-				errChan <- err
-				return
-			}
-		}
-		if len(req.Messages) > 0 {
-			messages = append(messages, req.Messages...)
-		}
-		messages = sanitizeGatewayMessages(messages)
-		messages = normalizeGatewayMessagesForModel(messages)
-		skills := normalizeSkills(append(historySkills, req.Skills...))
-		containerID := r.resolveContainerID(ctx, req.BotID, req.ContainerID)
-
-		payload := agentGatewayRequest{
-			Model: gatewayModelConfig{
-				ModelID:    chatModel.ModelID,
-				ClientType: clientType,
-				Input:      chatModel.Input,
-				APIKey:     provider.ApiKey,
-				BaseURL:    provider.BaseUrl,
-			},
-			ActiveContextTime: normalizeMaxContextLoad(maxContextLoadTime),
-			Channels:          req.Channels,
-			CurrentChannel:    req.CurrentChannel,
-			AllowedActions:    req.AllowedActions,
-			Messages:          messages,
-			Skills:            skills,
-			Query:             req.Query,
-			Identity: gatewayIdentity{
-				BotID:           req.BotID,
-				SessionID:       req.SessionID,
-				ContainerID:     containerID,
-				ContactID:       defaultString(req.ContactID, req.UserID, req.BotID),
-				ContactName:     defaultString(req.ContactName, "User"),
-				ContactAlias:    req.ContactAlias,
-				UserID:          req.UserID,
-				CurrentPlatform: req.CurrentChannel,
-				ReplyTarget:     req.ReplyTarget,
-				SessionToken:    req.SessionToken,
-			},
-		}
-		_ = language
-
-		if err := r.streamChat(ctx, payload, req.BotID, req.SessionID, req.Query, req.Token, chunkChan); err != nil {
-			errChan <- err
-			return
+		if err := r.streamChat(ctx, rc.payload, req.BotID, req.SessionID, req.Query, req.Token, chunkCh); err != nil {
+			errCh <- err
 		}
 	}()
-
-	return chunkChan, errChan
+	return chunkCh, errCh
 }
 
-// ---------- HTTP helpers ----------
+// --- HTTP helpers ---
 
-func (r *Resolver) postChat(ctx context.Context, payload agentGatewayRequest, token string) (agentGatewayResponse, error) {
+func (r *Resolver) postChat(ctx context.Context, payload gatewayRequest, token string) (gatewayResponse, error) {
 	body, err := json.Marshal(payload)
 	if err != nil {
-		return agentGatewayResponse{}, err
+		return gatewayResponse{}, err
 	}
 	url := r.gatewayBaseURL + "/chat/"
 	r.logger.Info("gateway request", slog.String("url", url), slog.String("body_prefix", truncate(string(body), 200)))
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
-		return agentGatewayResponse{}, err
+		return gatewayResponse{}, err
 	}
-	req.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Content-Type", "application/json")
 	if strings.TrimSpace(token) != "" {
-		req.Header.Set("Authorization", token)
+		httpReq.Header.Set("Authorization", token)
 	}
 
-	resp, err := r.httpClient.Do(req)
+	resp, err := r.httpClient.Do(httpReq)
 	if err != nil {
-		return agentGatewayResponse{}, err
+		return gatewayResponse{}, err
 	}
 	defer resp.Body.Close()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return agentGatewayResponse{}, err
+		return gatewayResponse{}, err
 	}
-
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		r.logger.Error("gateway request failed",
-			slog.String("url", url),
-			slog.Int("status", resp.StatusCode),
-			slog.String("body_prefix", truncate(string(respBody), 300)),
-		)
-		return agentGatewayResponse{}, fmt.Errorf("agent gateway error: %s", strings.TrimSpace(string(respBody)))
+		r.logger.Error("gateway error", slog.String("url", url), slog.Int("status", resp.StatusCode), slog.String("body_prefix", truncate(string(respBody), 300)))
+		return gatewayResponse{}, fmt.Errorf("agent gateway error: %s", strings.TrimSpace(string(respBody)))
 	}
 
-	parsed, err := parseAgentGatewayResponse(respBody)
-	if err != nil {
-		r.logger.Error("failed to parse agent gateway response", slog.String("body", string(respBody)), slog.Any("error", err))
-		return agentGatewayResponse{}, err
+	var parsed gatewayResponse
+	if err := json.Unmarshal(respBody, &parsed); err != nil {
+		r.logger.Error("gateway response parse failed", slog.String("body_prefix", truncate(string(respBody), 300)), slog.Any("error", err))
+		return gatewayResponse{}, fmt.Errorf("failed to parse gateway response: %w", err)
 	}
 	return parsed, nil
 }
 
-func (r *Resolver) streamChat(ctx context.Context, payload agentGatewayRequest, botID, sessionID, query, token string, chunkChan chan<- StreamChunk) error {
+func (r *Resolver) streamChat(ctx context.Context, payload gatewayRequest, botID, sessionID, query, token string, chunkCh chan<- StreamChunk) error {
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return err
 	}
-	url := r.gatewayBaseURL + "/chat/stream"
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, r.gatewayBaseURL+"/chat/stream", bytes.NewReader(body))
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "text/event-stream")
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Accept", "text/event-stream")
 	if strings.TrimSpace(token) != "" {
-		req.Header.Set("Authorization", token)
+		httpReq.Header.Set("Authorization", token)
 	}
 
-	resp, err := r.streamingClient.Do(req)
+	resp, err := r.streamingClient.Do(httpReq)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		payload, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("agent gateway error: %s", strings.TrimSpace(string(payload)))
+		errBody, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("agent gateway error: %s", strings.TrimSpace(string(errBody)))
 	}
 
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 0, 64*1024), 2*1024*1024)
 
-	currentEventType := ""
+	currentEvent := ""
 	stored := false
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
@@ -495,7 +356,7 @@ func (r *Resolver) streamChat(ctx context.Context, payload agentGatewayRequest, 
 			continue
 		}
 		if strings.HasPrefix(line, "event:") {
-			currentEventType = strings.TrimSpace(strings.TrimPrefix(line, "event:"))
+			currentEvent = strings.TrimSpace(strings.TrimPrefix(line, "event:"))
 			continue
 		}
 		if !strings.HasPrefix(line, "data:") {
@@ -505,26 +366,58 @@ func (r *Resolver) streamChat(ctx context.Context, payload agentGatewayRequest, 
 		if data == "" || data == "[DONE]" {
 			continue
 		}
-		chunkChan <- StreamChunk([]byte(data))
+		chunkCh <- StreamChunk([]byte(data))
 
 		if stored {
 			continue
 		}
-
-		if handled, err := r.tryStoreFromStreamPayload(ctx, botID, sessionID, query, currentEventType, data); err != nil {
-			return err
+		if handled, storeErr := r.tryStoreStream(ctx, botID, sessionID, query, currentEvent, data); storeErr != nil {
+			return storeErr
 		} else if handled {
 			stored = true
 		}
 	}
-
-	if err := scanner.Err(); err != nil {
-		return err
-	}
-	return nil
+	return scanner.Err()
 }
 
-// ---------- container resolution ----------
+// tryStoreStream attempts to extract final messages from a stream event and persist them.
+func (r *Resolver) tryStoreStream(ctx context.Context, botID, sessionID, query, eventType, data string) (bool, error) {
+	// event: done + data: {messages: [...]}
+	if eventType == "done" {
+		var resp gatewayResponse
+		if err := json.Unmarshal([]byte(data), &resp); err == nil && len(resp.Messages) > 0 {
+			return true, r.storeRound(ctx, botID, sessionID, query, resp.Messages, resp.Skills)
+		}
+	}
+
+	// data: {"type":"agent_end"|"done", ...}
+	var envelope struct {
+		Type     string          `json:"type"`
+		Data     json.RawMessage `json:"data"`
+		Messages []ModelMessage  `json:"messages"`
+		Skills   []string        `json:"skills"`
+	}
+	if err := json.Unmarshal([]byte(data), &envelope); err == nil {
+		if envelope.Type == "agent_end" && len(envelope.Messages) > 0 {
+			return true, r.storeRound(ctx, botID, sessionID, query, envelope.Messages, envelope.Skills)
+		}
+		if envelope.Type == "done" && len(envelope.Data) > 0 {
+			var resp gatewayResponse
+			if err := json.Unmarshal(envelope.Data, &resp); err == nil && len(resp.Messages) > 0 {
+				return true, r.storeRound(ctx, botID, sessionID, query, resp.Messages, resp.Skills)
+			}
+		}
+	}
+
+	// fallback: data: {messages: [...]}
+	var resp gatewayResponse
+	if err := json.Unmarshal([]byte(data), &resp); err == nil && len(resp.Messages) > 0 {
+		return true, r.storeRound(ctx, botID, sessionID, query, resp.Messages, resp.Skills)
+	}
+	return false, nil
+}
+
+// --- container resolution ---
 
 func (r *Resolver) resolveContainerID(ctx context.Context, botID, explicit string) string {
 	if strings.TrimSpace(explicit) != "" {
@@ -542,377 +435,242 @@ func (r *Resolver) resolveContainerID(ctx context.Context, botID, explicit strin
 	return "mcp-" + botID
 }
 
-// ---------- history helpers ----------
+// --- history helpers ---
 
-func (r *Resolver) loadHistoryMessages(ctx context.Context, botID, sessionID string, maxContextLoadTime int) ([]GatewayMessage, error) {
+func (r *Resolver) loadHistoryMessages(ctx context.Context, botID, sessionID string, maxContextMinutes int) ([]ModelMessage, error) {
 	if r.historyService == nil {
 		return nil, fmt.Errorf("history service not configured")
 	}
-	from := time.Now().UTC().Add(-time.Duration(normalizeMaxContextLoad(maxContextLoadTime)) * time.Minute)
-	records, err := r.historyService.ListBySessionSince(ctx, botID, sessionID, from)
+	since := time.Now().UTC().Add(-time.Duration(maxContextMinutes) * time.Minute)
+	records, err := r.historyService.ListBySessionSince(ctx, botID, sessionID, since)
 	if err != nil {
 		return nil, err
 	}
-	messages := make([]GatewayMessage, 0, len(records))
+	var messages []ModelMessage
 	for _, record := range records {
-		if len(record.Messages) == 0 {
+		msgs, err := recordToMessages(record)
+		if err != nil {
+			r.logger.Warn("skip malformed history record", slog.String("record_id", record.ID), slog.Any("error", err))
 			continue
 		}
-		for _, msg := range record.Messages {
-			if msg == nil {
-				continue
-			}
-			messages = append(messages, GatewayMessage(msg))
-		}
+		messages = append(messages, msgs...)
 	}
 	return messages, nil
 }
 
-func (r *Resolver) loadHistorySkills(ctx context.Context, botID, sessionID string, maxContextLoadTime int) ([]string, error) {
+func (r *Resolver) loadHistorySkills(ctx context.Context, botID, sessionID string, maxContextMinutes int) ([]string, error) {
 	if r.historyService == nil {
 		return nil, fmt.Errorf("history service not configured")
 	}
-	from := time.Now().UTC().Add(-time.Duration(normalizeMaxContextLoad(maxContextLoadTime)) * time.Minute)
-	records, err := r.historyService.ListBySessionSince(ctx, botID, sessionID, from)
+	since := time.Now().UTC().Add(-time.Duration(maxContextMinutes) * time.Minute)
+	records, err := r.historyService.ListBySessionSince(ctx, botID, sessionID, since)
 	if err != nil {
 		return nil, err
 	}
-	combined := make([]string, 0, len(records))
+	var combined []string
 	for _, record := range records {
-		if len(record.Skills) == 0 {
-			continue
-		}
 		combined = append(combined, record.Skills...)
 	}
-	return normalizeSkills(combined), nil
+	return dedup(combined), nil
 }
 
-// ---------- store helpers ----------
+// recordToMessages converts a history record (stored as []map[string]any) to typed ModelMessages.
+func recordToMessages(record history.Record) ([]ModelMessage, error) {
+	if len(record.Messages) == 0 {
+		return nil, nil
+	}
+	raw, err := json.Marshal(record.Messages)
+	if err != nil {
+		return nil, err
+	}
+	var msgs []ModelMessage
+	if err := json.Unmarshal(raw, &msgs); err != nil {
+		return nil, err
+	}
+	return msgs, nil
+}
 
-func (r *Resolver) storeHistory(ctx context.Context, botID, sessionID, query string, responseMessages []GatewayMessage, skills []string) error {
+// --- store helpers ---
+
+func (r *Resolver) storeRound(ctx context.Context, botID, sessionID, query string, messages []ModelMessage, skills []string) error {
+	if err := r.storeHistory(ctx, botID, sessionID, query, messages, skills); err != nil {
+		return err
+	}
+	r.storeMemory(ctx, botID, sessionID, query, messages)
+	return nil
+}
+
+func (r *Resolver) storeHistory(ctx context.Context, botID, sessionID, query string, messages []ModelMessage, skills []string) error {
 	if r.historyService == nil {
 		return fmt.Errorf("history service not configured")
 	}
-	if strings.TrimSpace(botID) == "" {
-		return fmt.Errorf("bot id is required")
+	if strings.TrimSpace(botID) == "" || strings.TrimSpace(sessionID) == "" {
+		return fmt.Errorf("bot id and session id are required")
 	}
-	trimmedSession := strings.TrimSpace(sessionID)
-	if trimmedSession == "" {
-		return fmt.Errorf("session id is required")
-	}
-	if strings.TrimSpace(query) == "" && len(responseMessages) == 0 {
+	if strings.TrimSpace(query) == "" && len(messages) == 0 {
 		return nil
 	}
-	messages := make([]map[string]any, 0, len(responseMessages))
-	for _, msg := range responseMessages {
-		if msg == nil {
-			continue
-		}
-		messages = append(messages, map[string]any(msg))
+	// Convert typed messages to []map[string]any for the history service.
+	raw, err := json.Marshal(messages)
+	if err != nil {
+		return err
 	}
-	metadata := map[string]any{
-		"query": strings.TrimSpace(query),
+	var rows []map[string]any
+	if err := json.Unmarshal(raw, &rows); err != nil {
+		return err
 	}
-	_, err := r.historyService.Create(ctx, botID, trimmedSession, history.CreateRequest{
-		Messages: messages,
-		Metadata: metadata,
+	_, err = r.historyService.Create(ctx, botID, strings.TrimSpace(sessionID), history.CreateRequest{
+		Messages: rows,
+		Metadata: map[string]any{"query": strings.TrimSpace(query)},
 		Skills:   skills,
 	})
 	return err
 }
 
-func (r *Resolver) storeMemory(ctx context.Context, botID, sessionID, query string, responseMessages []GatewayMessage) error {
+func (r *Resolver) storeMemory(ctx context.Context, botID, sessionID, query string, messages []ModelMessage) {
 	if r.memoryService == nil {
-		return nil
+		return
 	}
-	if strings.TrimSpace(botID) == "" {
-		return fmt.Errorf("bot id is required")
+	if strings.TrimSpace(botID) == "" || strings.TrimSpace(sessionID) == "" {
+		return
 	}
-	trimmedSession := strings.TrimSpace(sessionID)
-	if trimmedSession == "" {
-		return fmt.Errorf("session id is required")
-	}
-	if strings.TrimSpace(query) == "" && len(responseMessages) == 0 {
-		return nil
-	}
-
-	memoryMessages := make([]memory.Message, 0, len(responseMessages))
-	for _, msg := range responseMessages {
-		role, content := gatewayMessageToMemory(msg)
-		if strings.TrimSpace(content) == "" {
+	memMsgs := make([]memory.Message, 0, len(messages))
+	for _, msg := range messages {
+		text := strings.TrimSpace(msg.TextContent())
+		if text == "" {
 			continue
 		}
-		memoryMessages = append(memoryMessages, memory.Message{
-			Role:    role,
-			Content: content,
-		})
+		role := msg.Role
+		if strings.TrimSpace(role) == "" {
+			role = "assistant"
+		}
+		memMsgs = append(memMsgs, memory.Message{Role: role, Content: text})
 	}
-	if len(memoryMessages) == 0 {
-		return nil
+	if len(memMsgs) == 0 {
+		return
 	}
-
-	_, err := r.memoryService.Add(ctx, memory.AddRequest{
-		Messages:  memoryMessages,
+	if _, err := r.memoryService.Add(ctx, memory.AddRequest{
+		Messages:  memMsgs,
 		BotID:     botID,
-		SessionID: trimmedSession,
-	})
-	return err
+		SessionID: strings.TrimSpace(sessionID),
+	}); err != nil {
+		r.logger.Warn("store memory failed", slog.Any("error", err))
+	}
 }
 
-func (r *Resolver) tryStoreFromStreamPayload(ctx context.Context, botID, sessionID, query, eventType, data string) (bool, error) {
-	// Case 1: event: done + data: {messages: [...]}
-	if eventType == "done" {
-		if parsed, ok := parseGatewayResponse([]byte(data)); ok {
-			parsed.Messages = normalizeGatewayMessages(parsed.Messages)
-			return r.storeRound(ctx, botID, sessionID, query, parsed.Messages, parsed.Skills)
-		}
-	}
+// --- model selection ---
 
-	// Case 2: data: {"type":"agent_end","messages":[...],"skills":[...]}
-	var envelope struct {
-		Type     string          `json:"type"`
-		Data     json.RawMessage `json:"data"`
-		Messages json.RawMessage `json:"messages"`
-		Skills   []string        `json:"skills"`
-	}
-	if err := json.Unmarshal([]byte(data), &envelope); err == nil {
-		if envelope.Type == "agent_end" {
-			// agent_end with inline messages
-			if len(envelope.Messages) > 0 {
-				if parsed, ok := parseGatewayResponseFromRaw(envelope.Messages, envelope.Skills); ok {
-					parsed.Messages = normalizeGatewayMessages(parsed.Messages)
-					return r.storeRound(ctx, botID, sessionID, query, parsed.Messages, parsed.Skills)
-				}
-			}
-		}
-		if envelope.Type == "done" && len(envelope.Data) > 0 {
-			if parsed, ok := parseGatewayResponse(envelope.Data); ok {
-				parsed.Messages = normalizeGatewayMessages(parsed.Messages)
-				return r.storeRound(ctx, botID, sessionID, query, parsed.Messages, parsed.Skills)
-			}
-		}
-	}
-
-	// Case 3: data: {messages:[...]} without event
-	if parsed, ok := parseGatewayResponse([]byte(data)); ok {
-		parsed.Messages = normalizeGatewayMessages(parsed.Messages)
-		return r.storeRound(ctx, botID, sessionID, query, parsed.Messages, parsed.Skills)
-	}
-	return false, nil
-}
-
-func parseGatewayResponse(payload []byte) (agentGatewayResponse, bool) {
-	parsed, err := parseAgentGatewayResponse(payload)
-	if err != nil {
-		return agentGatewayResponse{}, false
-	}
-	if len(parsed.Messages) == 0 {
-		return agentGatewayResponse{}, false
-	}
-	return parsed, true
-}
-
-func parseGatewayResponseFromRaw(messagesRaw json.RawMessage, skills []string) (agentGatewayResponse, bool) {
-	var rawMessages []json.RawMessage
-	if err := json.Unmarshal(messagesRaw, &rawMessages); err != nil {
-		return agentGatewayResponse{}, false
-	}
-	messages := make([]GatewayMessage, 0, len(rawMessages))
-	for _, rawMsg := range rawMessages {
-		var msg map[string]any
-		if err := json.Unmarshal(rawMsg, &msg); err != nil {
-			continue
-		}
-		messages = append(messages, GatewayMessage(msg))
-	}
-	if len(messages) == 0 {
-		return agentGatewayResponse{}, false
-	}
-	return agentGatewayResponse{Messages: messages, Skills: skills}, true
-}
-
-// parseAgentGatewayResponse parses the agent gateway response with flexible message handling.
-func parseAgentGatewayResponse(payload []byte) (agentGatewayResponse, error) {
-	var raw struct {
-		Messages []json.RawMessage `json:"messages"`
-		Skills   []string          `json:"skills"`
-	}
-	if err := json.Unmarshal(payload, &raw); err != nil {
-		return agentGatewayResponse{}, fmt.Errorf("failed to parse response structure: %w", err)
-	}
-
-	messages := make([]GatewayMessage, 0, len(raw.Messages))
-	for _, rawMsg := range raw.Messages {
-		var msg map[string]any
-		if err := json.Unmarshal(rawMsg, &msg); err != nil {
-			var arr []any
-			if err := json.Unmarshal(rawMsg, &arr); err == nil {
-				for _, item := range arr {
-					if m, ok := item.(map[string]any); ok {
-						messages = append(messages, GatewayMessage(m))
-					}
-				}
-				continue
-			}
-			continue
-		}
-		messages = append(messages, GatewayMessage(msg))
-	}
-
-	return agentGatewayResponse{
-		Messages: messages,
-		Skills:   raw.Skills,
-	}, nil
-}
-
-func (r *Resolver) storeRound(ctx context.Context, botID, sessionID, query string, messages []GatewayMessage, skills []string) (bool, error) {
-	if err := r.storeHistory(ctx, botID, sessionID, query, messages, skills); err != nil {
-		return true, err
-	}
-	if err := r.storeMemory(ctx, botID, sessionID, query, messages); err != nil {
-		return true, err
-	}
-	return true, nil
-}
-
-// ---------- model selection ----------
-
-func (r *Resolver) selectChatModel(ctx context.Context, req ChatRequest, settings userSettings) (models.GetResponse, sqlc.LlmProvider, error) {
+func (r *Resolver) selectChatModel(ctx context.Context, req ChatRequest, us resolvedUserSettings) (models.GetResponse, sqlc.LlmProvider, error) {
 	if r.modelsService == nil {
 		return models.GetResponse{}, sqlc.LlmProvider{}, fmt.Errorf("models service not configured")
 	}
 	modelID := strings.TrimSpace(req.Model)
 	providerFilter := strings.TrimSpace(req.Provider)
 
+	// Priority: request model > user settings > first available.
+	if modelID == "" && providerFilter == "" && strings.TrimSpace(us.ChatModelID) != "" {
+		modelID = us.ChatModelID
+	}
+
 	if modelID != "" && providerFilter == "" {
-		model, err := r.modelsService.GetByModelID(ctx, modelID)
-		if err != nil {
-			return models.GetResponse{}, sqlc.LlmProvider{}, err
-		}
-		if model.Type != models.ModelTypeChat {
-			return models.GetResponse{}, sqlc.LlmProvider{}, fmt.Errorf("model is not a chat model")
-		}
-		provider, err := models.FetchProviderByID(ctx, r.queries, model.LlmProviderID)
-		if err != nil {
-			return models.GetResponse{}, sqlc.LlmProvider{}, err
-		}
-		return model, provider, nil
+		return r.fetchChatModel(ctx, modelID)
 	}
 
-	if providerFilter == "" && modelID == "" && strings.TrimSpace(settings.ChatModelID) != "" {
-		selected, err := r.modelsService.GetByModelID(ctx, settings.ChatModelID)
-		if err != nil {
-			return models.GetResponse{}, sqlc.LlmProvider{}, fmt.Errorf("settings chat model not found: %w", err)
-		}
-		if selected.Type != models.ModelTypeChat {
-			return models.GetResponse{}, sqlc.LlmProvider{}, fmt.Errorf("settings chat model is not a chat model")
-		}
-		provider, err := models.FetchProviderByID(ctx, r.queries, selected.LlmProviderID)
-		if err != nil {
-			return models.GetResponse{}, sqlc.LlmProvider{}, err
-		}
-		return selected, provider, nil
-	}
-
-	var candidates []models.GetResponse
-	var err error
-	if providerFilter != "" {
-		candidates, err = r.modelsService.ListByClientType(ctx, models.ClientType(providerFilter))
-	} else {
-		candidates, err = r.modelsService.ListByType(ctx, models.ModelTypeChat)
-	}
+	candidates, err := r.listCandidates(ctx, providerFilter)
 	if err != nil {
 		return models.GetResponse{}, sqlc.LlmProvider{}, err
 	}
-
-	filtered := make([]models.GetResponse, 0, len(candidates))
-	for _, model := range candidates {
-		if model.Type != models.ModelTypeChat {
-			continue
-		}
-		filtered = append(filtered, model)
-	}
-	if len(filtered) == 0 {
-		return models.GetResponse{}, sqlc.LlmProvider{}, fmt.Errorf("no chat models available")
-	}
-
 	if modelID != "" {
-		for _, model := range filtered {
-			if model.ModelID == modelID {
-				provider, err := models.FetchProviderByID(ctx, r.queries, model.LlmProviderID)
+		for _, m := range candidates {
+			if m.ModelID == modelID {
+				prov, err := models.FetchProviderByID(ctx, r.queries, m.LlmProviderID)
 				if err != nil {
 					return models.GetResponse{}, sqlc.LlmProvider{}, err
 				}
-				return model, provider, nil
+				return m, prov, nil
 			}
 		}
 		return models.GetResponse{}, sqlc.LlmProvider{}, fmt.Errorf("chat model not found")
 	}
-
-	selected := filtered[0]
-	provider, err := models.FetchProviderByID(ctx, r.queries, selected.LlmProviderID)
+	if len(candidates) == 0 {
+		return models.GetResponse{}, sqlc.LlmProvider{}, fmt.Errorf("no chat models available")
+	}
+	prov, err := models.FetchProviderByID(ctx, r.queries, candidates[0].LlmProviderID)
 	if err != nil {
 		return models.GetResponse{}, sqlc.LlmProvider{}, err
 	}
-	return selected, provider, nil
+	return candidates[0], prov, nil
 }
 
-// ---------- settings helpers ----------
-
-func normalizeMaxContextLoad(value int) int {
-	if value <= 0 {
-		return defaultMaxContextMinutes
-	}
-	return value
-}
-
-func (r *Resolver) loadUserSettings(ctx context.Context, userID string) (userSettings, error) {
-	defaults := userSettings{
-		MaxContextLoadTime: defaultMaxContextMinutes,
-		Language:           settings.DefaultLanguage,
-	}
-	if r.settingsService == nil || strings.TrimSpace(userID) == "" {
-		return defaults, nil
-	}
-	settingsRow, err := r.settingsService.Get(ctx, userID)
+func (r *Resolver) fetchChatModel(ctx context.Context, modelID string) (models.GetResponse, sqlc.LlmProvider, error) {
+	model, err := r.modelsService.GetByModelID(ctx, modelID)
 	if err != nil {
-		return userSettings{}, err
+		return models.GetResponse{}, sqlc.LlmProvider{}, err
 	}
-	maxLoad := settingsRow.MaxContextLoadTime
-	if maxLoad <= 0 {
-		maxLoad = defaultMaxContextMinutes
+	if model.Type != models.ModelTypeChat {
+		return models.GetResponse{}, sqlc.LlmProvider{}, fmt.Errorf("model is not a chat model")
 	}
-	language := strings.TrimSpace(settingsRow.Language)
-	if language == "" || language == "auto" {
-		language = settings.DefaultLanguage
+	prov, err := models.FetchProviderByID(ctx, r.queries, model.LlmProviderID)
+	if err != nil {
+		return models.GetResponse{}, sqlc.LlmProvider{}, err
 	}
-	return userSettings{
-		ChatModelID:        strings.TrimSpace(settingsRow.ChatModelID),
-		MemoryModelID:      strings.TrimSpace(settingsRow.MemoryModelID),
-		EmbeddingModelID:   strings.TrimSpace(settingsRow.EmbeddingModelID),
-		MaxContextLoadTime: maxLoad,
-		Language:           language,
+	return model, prov, nil
+}
+
+func (r *Resolver) listCandidates(ctx context.Context, providerFilter string) ([]models.GetResponse, error) {
+	var all []models.GetResponse
+	var err error
+	if providerFilter != "" {
+		all, err = r.modelsService.ListByClientType(ctx, models.ClientType(providerFilter))
+	} else {
+		all, err = r.modelsService.ListByType(ctx, models.ModelTypeChat)
+	}
+	if err != nil {
+		return nil, err
+	}
+	filtered := make([]models.GetResponse, 0, len(all))
+	for _, m := range all {
+		if m.Type == models.ModelTypeChat {
+			filtered = append(filtered, m)
+		}
+	}
+	return filtered, nil
+}
+
+// --- settings ---
+
+type resolvedUserSettings struct {
+	ChatModelID string
+}
+
+func (r *Resolver) loadUserSettings(ctx context.Context, userID string) (resolvedUserSettings, error) {
+	if r.settingsService == nil || strings.TrimSpace(userID) == "" {
+		return resolvedUserSettings{}, nil
+	}
+	s, err := r.settingsService.Get(ctx, userID)
+	if err != nil {
+		return resolvedUserSettings{}, err
+	}
+	return resolvedUserSettings{
+		ChatModelID: strings.TrimSpace(s.ChatModelID),
 	}, nil
 }
 
-func (r *Resolver) loadBotSettings(ctx context.Context, botID string) (int, string, error) {
+func (r *Resolver) loadBotSettings(ctx context.Context, botID string) (settings.Settings, error) {
 	if r.settingsService == nil {
-		return settings.DefaultMaxContextLoadTime, settings.DefaultLanguage, nil
+		return settings.Settings{
+			MaxContextLoadTime: settings.DefaultMaxContextLoadTime,
+			Language:           settings.DefaultLanguage,
+		}, nil
 	}
-	settingsRow, err := r.settingsService.GetBot(ctx, botID)
-	if err != nil {
-		return 0, "", err
-	}
-	return settingsRow.MaxContextLoadTime, settingsRow.Language, nil
+	return r.settingsService.GetBot(ctx, botID)
 }
 
-// ---------- utility ----------
+// --- utility ---
 
 func normalizeClientType(clientType string) (string, error) {
 	switch strings.ToLower(strings.TrimSpace(clientType)) {
-	case "openai":
-		return "openai", nil
-	case "openai-compat":
+	case "openai", "openai-compat":
 		return "openai", nil
 	case "anthropic":
 		return "anthropic", nil
@@ -923,51 +681,13 @@ func normalizeClientType(clientType string) (string, error) {
 	}
 }
 
-func normalizeSkills(skills []string) []string {
-	seen := map[string]struct{}{}
-	normalized := make([]string, 0, len(skills))
-	for _, skill := range skills {
-		trimmed := strings.TrimSpace(skill)
-		if trimmed == "" {
-			continue
-		}
-		if _, ok := seen[trimmed]; ok {
-			continue
-		}
-		seen[trimmed] = struct{}{}
-		normalized = append(normalized, trimmed)
-	}
-	return normalized
-}
-
-func gatewayMessageToMemory(msg GatewayMessage) (string, string) {
-	role := "assistant"
-	if raw, ok := msg["role"].(string); ok && strings.TrimSpace(raw) != "" {
-		role = raw
-	}
-	if raw, ok := msg["content"]; ok {
-		switch v := raw.(type) {
-		case string:
-			return role, v
-		default:
-			if encoded, err := json.Marshal(v); err == nil {
-				return role, string(encoded)
-			}
-		}
-	}
-	if encoded, err := json.Marshal(msg); err == nil {
-		return role, string(encoded)
-	}
-	return role, ""
-}
-
-func sanitizeGatewayMessages(messages []GatewayMessage) []GatewayMessage {
-	if len(messages) == 0 {
-		return messages
-	}
-	cleaned := make([]GatewayMessage, 0, len(messages))
+func sanitizeMessages(messages []ModelMessage) []ModelMessage {
+	cleaned := make([]ModelMessage, 0, len(messages))
 	for _, msg := range messages {
-		if !isMeaningfulGatewayMessage(msg) {
+		if strings.TrimSpace(msg.Role) == "" {
+			continue
+		}
+		if !msg.HasContent() && strings.TrimSpace(msg.ToolCallID) == "" {
 			continue
 		}
 		cleaned = append(cleaned, msg)
@@ -975,91 +695,53 @@ func sanitizeGatewayMessages(messages []GatewayMessage) []GatewayMessage {
 	return cleaned
 }
 
-func normalizeGatewayMessagesForModel(messages []GatewayMessage) []GatewayMessage {
-	if len(messages) == 0 {
-		return messages
-	}
-	cleaned := make([]GatewayMessage, 0, len(messages))
-	for _, msg := range messages {
-		if msg == nil {
+func dedup(items []string) []string {
+	seen := make(map[string]struct{}, len(items))
+	result := make([]string, 0, len(items))
+	for _, s := range items {
+		trimmed := strings.TrimSpace(s)
+		if trimmed == "" {
 			continue
 		}
-		role, content := gatewayMessageToMemory(msg)
-		content = strings.TrimSpace(content)
-		if content == "" {
+		if _, ok := seen[trimmed]; ok {
 			continue
 		}
-		if strings.TrimSpace(role) == "" {
-			role = "assistant"
-		}
-		if role == "tool" {
-			role = "assistant"
-			content = "[tool] " + content
-		}
-		cleaned = append(cleaned, GatewayMessage{
-			"role":    role,
-			"content": content,
-		})
+		seen[trimmed] = struct{}{}
+		result = append(result, trimmed)
 	}
-	return cleaned
+	return result
 }
 
-func isMeaningfulGatewayMessage(msg GatewayMessage) bool {
-	if len(msg) == 0 {
-		return false
-	}
-	if raw, ok := msg["role"].(string); ok && strings.TrimSpace(raw) != "" {
-		return true
-	}
-	if raw, ok := msg["content"]; ok {
-		switch v := raw.(type) {
-		case string:
-			if strings.TrimSpace(v) != "" {
-				return true
-			}
-		default:
-			if !isEmptyValue(v) {
-				return true
-			}
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if strings.TrimSpace(v) != "" {
+			return v
 		}
 	}
-	for _, value := range msg {
-		if !isEmptyValue(value) {
-			return true
-		}
-	}
-	return false
+	return ""
 }
 
-func isEmptyValue(value any) bool {
-	switch v := value.(type) {
-	case nil:
-		return true
-	case string:
-		return strings.TrimSpace(v) == ""
-	case []any:
-		if len(v) == 0 {
-			return true
+func coalescePositiveInt(values ...int) int {
+	for _, v := range values {
+		if v > 0 {
+			return v
 		}
-		for _, item := range v {
-			if !isEmptyValue(item) {
-				return false
-			}
-		}
-		return true
-	case map[string]any:
-		if len(v) == 0 {
-			return true
-		}
-		for _, item := range v {
-			if !isEmptyValue(item) {
-				return false
-			}
-		}
-		return true
-	default:
-		return false
 	}
+	return defaultMaxContextMinutes
+}
+
+func nonNilStrings(s []string) []string {
+	if s == nil {
+		return []string{}
+	}
+	return s
+}
+
+func nonNilMessages(m []ModelMessage) []ModelMessage {
+	if m == nil {
+		return []ModelMessage{}
+	}
+	return m
 }
 
 func truncate(s string, n int) string {
@@ -1069,31 +751,14 @@ func truncate(s string, n int) string {
 	return s[:n] + "..."
 }
 
-func defaultString(values ...string) string {
-	for _, v := range values {
-		if strings.TrimSpace(v) != "" {
-			return v
-		}
-	}
-	return ""
-}
-
 func parseUUID(id string) (pgtype.UUID, error) {
-	parsed, err := parseUUIDHelper(id)
-	if err != nil {
-		return pgtype.UUID{}, fmt.Errorf("invalid UUID: %w", err)
-	}
-	return parsed, nil
-}
-
-func parseUUIDHelper(id string) (pgtype.UUID, error) {
 	trimmed := strings.TrimSpace(id)
 	if trimmed == "" {
 		return pgtype.UUID{}, fmt.Errorf("empty id")
 	}
 	var pgID pgtype.UUID
 	if err := pgID.Scan(trimmed); err != nil {
-		return pgtype.UUID{}, err
+		return pgtype.UUID{}, fmt.Errorf("invalid UUID: %w", err)
 	}
 	return pgID, nil
 }

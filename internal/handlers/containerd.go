@@ -44,7 +44,6 @@ type ContainerdHandler struct {
 }
 
 type CreateContainerRequest struct {
-	ContainerID string `json:"container_id"`
 	Image       string `json:"image,omitempty"`
 	Snapshotter string `json:"snapshotter,omitempty"`
 }
@@ -56,8 +55,19 @@ type CreateContainerResponse struct {
 	Started     bool   `json:"started"`
 }
 
+type GetContainerResponse struct {
+	ContainerID   string    `json:"container_id"`
+	Image         string    `json:"image"`
+	Status        string    `json:"status"`
+	Namespace     string    `json:"namespace"`
+	HostPath      string    `json:"host_path,omitempty"`
+	ContainerPath string    `json:"container_path"`
+	TaskRunning   bool      `json:"task_running"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
+}
+
 type CreateSnapshotRequest struct {
-	ContainerID  string `json:"container_id"`
 	SnapshotName string `json:"snapshot_name"`
 }
 
@@ -65,20 +75,6 @@ type CreateSnapshotResponse struct {
 	ContainerID  string `json:"container_id"`
 	SnapshotName string `json:"snapshot_name"`
 	Snapshotter  string `json:"snapshotter"`
-}
-
-type ContainerInfo struct {
-	ID          string            `json:"id"`
-	Image       string            `json:"image,omitempty"`
-	Snapshotter string            `json:"snapshotter,omitempty"`
-	SnapshotKey string            `json:"snapshot_key,omitempty"`
-	CreatedAt   time.Time         `json:"created_at,omitempty"`
-	UpdatedAt   time.Time         `json:"updated_at,omitempty"`
-	Labels      map[string]string `json:"labels,omitempty"`
-}
-
-type ListContainersResponse struct {
-	Containers []ContainerInfo `json:"containers"`
 }
 
 type SnapshotInfo struct {
@@ -112,14 +108,16 @@ func NewContainerdHandler(log *slog.Logger, service ctr.Service, cfg config.MCPC
 func (h *ContainerdHandler) Register(e *echo.Echo) {
 	group := e.Group("/bots/:bot_id/container")
 	group.POST("", h.CreateContainer)
-	group.GET("/list", h.ListContainers)
-	group.DELETE("/:id", h.DeleteContainer)
+	group.GET("", h.GetContainer)
+	group.DELETE("", h.DeleteContainer)
+	group.POST("/start", h.StartContainer)
+	group.POST("/stop", h.StopContainer)
 	group.POST("/snapshots", h.CreateSnapshot)
 	group.GET("/snapshots", h.ListSnapshots)
 	group.GET("/skills", h.ListSkills)
 	group.POST("/skills", h.UpsertSkills)
 	group.DELETE("/skills", h.DeleteSkills)
-	group.POST("/fs/:id", h.HandleMCPFS)
+	group.POST("/fs", h.HandleMCPFS)
 }
 
 // CreateContainer godoc
@@ -141,10 +139,7 @@ func (h *ContainerdHandler) CreateContainer(c echo.Context) error {
 	if err := c.Bind(&req); err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
 	}
-	req.ContainerID = strings.TrimSpace(req.ContainerID)
-	if req.ContainerID == "" {
-		req.ContainerID = "mcp-" + botID
-	}
+	containerID := mcp.ContainerPrefix + botID
 
 	image := strings.TrimSpace(req.Image)
 	if image == "" {
@@ -166,6 +161,7 @@ func (h *ContainerdHandler) CreateContainer(c echo.Context) error {
 	if dataRoot == "" {
 		dataRoot = config.DefaultDataRoot
 	}
+	dataRoot, _ = filepath.Abs(dataRoot)
 	dataMount := strings.TrimSpace(h.cfg.DataMount)
 	if dataMount == "" {
 		dataMount = config.DefaultDataMount
@@ -197,7 +193,7 @@ func (h *ContainerdHandler) CreateContainer(c echo.Context) error {
 	}
 
 	_, err = h.service.CreateContainer(ctx, ctr.CreateContainerRequest{
-		ID:          req.ContainerID,
+		ID:          containerID,
 		ImageRef:    image,
 		Snapshotter: snapshotter,
 		Labels: map[string]string{
@@ -209,7 +205,6 @@ func (h *ContainerdHandler) CreateContainer(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "snapshotter="+snapshotter+" image="+image+" err="+err.Error())
 	}
 
-	// Persist container record in database
 	if h.queries != nil {
 		pgBotID, parseErr := parsePgUUID(botID)
 		if parseErr == nil {
@@ -219,8 +214,8 @@ func (h *ContainerdHandler) CreateContainer(c echo.Context) error {
 			}
 			_ = h.queries.UpsertContainer(c.Request().Context(), dbsqlc.UpsertContainerParams{
 				BotID:         pgBotID,
-				ContainerID:   req.ContainerID,
-				ContainerName: req.ContainerID,
+				ContainerID:   containerID,
+				ContainerName: containerID,
 				Image:         image,
 				Status:        "created",
 				Namespace:     ns,
@@ -236,20 +231,25 @@ func (h *ContainerdHandler) CreateContainer(c echo.Context) error {
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 	}
-	if _, err := h.service.StartTask(c.Request().Context(), req.ContainerID, &ctr.StartTaskOptions{
+	if _, err := h.service.StartTask(ctx, containerID, &ctr.StartTaskOptions{
 		UseStdio: false,
 		FIFODir:  fifoDir,
 	}); err == nil {
 		started = true
+		if h.queries != nil {
+			if pgBotID, parseErr := parsePgUUID(botID); parseErr == nil {
+				_ = h.queries.UpdateContainerStarted(c.Request().Context(), pgBotID)
+			}
+		}
 	} else {
 		h.logger.Error("mcp container start failed",
-			slog.String("container_id", req.ContainerID),
+			slog.String("container_id", containerID),
 			slog.Any("error", err),
 		)
 	}
 
 	return c.JSON(http.StatusOK, CreateContainerResponse{
-		ContainerID: req.ContainerID,
+		ContainerID: containerID,
 		Image:       image,
 		Snapshotter: snapshotter,
 		Started:     started,
@@ -334,122 +334,212 @@ func (h *ContainerdHandler) botContainerID(ctx context.Context, botID string) (s
 	return bestID, nil
 }
 
-// ListContainers godoc
-// @Summary List containers for bot
+// GetContainer godoc
+// @Summary Get container info for bot
 // @Tags containerd
 // @Param bot_id path string true "Bot ID"
-// @Success 200 {object} ListContainersResponse
+// @Success 200 {object} GetContainerResponse
+// @Failure 404 {object} ErrorResponse
 // @Failure 500 {object} ErrorResponse
-// @Router /bots/{bot_id}/container/list [get]
-func (h *ContainerdHandler) ListContainers(c echo.Context) error {
+// @Router /bots/{bot_id}/container [get]
+func (h *ContainerdHandler) GetContainer(c echo.Context) error {
 	botID, err := h.requireBotAccess(c)
 	if err != nil {
 		return err
 	}
 	ctx := c.Request().Context()
-	containers, err := h.service.ListContainersByLabel(ctx, mcp.BotLabelKey, botID)
+
+	if h.queries != nil {
+		pgBotID, parseErr := parsePgUUID(botID)
+		if parseErr == nil {
+			row, dbErr := h.queries.GetContainerByBotID(ctx, pgBotID)
+			if dbErr == nil {
+				taskRunning := h.isTaskRunning(ctx, row.ContainerID)
+				hostPath := ""
+				if row.HostPath.Valid {
+					hostPath = row.HostPath.String
+				}
+				createdAt := time.Time{}
+				if row.CreatedAt.Valid {
+					createdAt = row.CreatedAt.Time
+				}
+				updatedAt := time.Time{}
+				if row.UpdatedAt.Valid {
+					updatedAt = row.UpdatedAt.Time
+				}
+				return c.JSON(http.StatusOK, GetContainerResponse{
+					ContainerID:   row.ContainerID,
+					Image:         row.Image,
+					Status:        row.Status,
+					Namespace:     row.Namespace,
+					HostPath:      hostPath,
+					ContainerPath: row.ContainerPath,
+					TaskRunning:   taskRunning,
+					CreatedAt:     createdAt,
+					UpdatedAt:     updatedAt,
+				})
+			}
+		}
+	}
+
+	containerID, err := h.botContainerID(ctx, botID)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+		return echo.NewHTTPError(http.StatusNotFound, "container not found for bot")
 	}
 	infoCtx := ctx
 	if strings.TrimSpace(h.namespace) != "" {
 		infoCtx = namespaces.WithNamespace(ctx, h.namespace)
 	}
-	items := make([]ContainerInfo, 0, len(containers))
-	for _, container := range containers {
-		info, err := container.Info(infoCtx)
-		if err != nil {
-			return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
-		}
-		items = append(items, ContainerInfo{
-			ID:          info.ID,
-			Image:       info.Image,
-			Snapshotter: info.Snapshotter,
-			SnapshotKey: info.SnapshotKey,
-			CreatedAt:   info.CreatedAt,
-			UpdatedAt:   info.UpdatedAt,
-			Labels:      info.Labels,
-		})
-	}
-	sort.Slice(items, func(i, j int) bool {
-		return items[i].ID < items[j].ID
-	})
-	return c.JSON(http.StatusOK, ListContainersResponse{Containers: items})
-}
-
-// DeleteContainer godoc
-// @Summary Delete MCP container
-// @Tags containerd
-// @Param bot_id path string true "Bot ID"
-// @Param id path string true "Container ID"
-// @Success 204
-// @Failure 400 {object} ErrorResponse
-// @Failure 404 {object} ErrorResponse
-// @Failure 500 {object} ErrorResponse
-// @Router /bots/{bot_id}/container/{id} [delete]
-func (h *ContainerdHandler) DeleteContainer(c echo.Context) error {
-	if _, err := h.requireBotAccess(c); err != nil {
-		return err
-	}
-	containerID := strings.TrimSpace(c.Param("id"))
-	if containerID == "" {
-		return echo.NewHTTPError(http.StatusBadRequest, "container id is required")
-	}
-	_ = h.service.DeleteTask(c.Request().Context(), containerID, &ctr.DeleteTaskOptions{Force: true})
-	if err := h.service.DeleteContainer(c.Request().Context(), containerID, &ctr.DeleteContainerOptions{
-		CleanupSnapshot: true,
-	}); err != nil {
+	container, err := h.service.GetContainer(infoCtx, containerID)
+	if err != nil {
 		if errdefs.IsNotFound(err) {
 			return echo.NewHTTPError(http.StatusNotFound, "container not found")
 		}
 		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 	}
+	info, err := container.Info(infoCtx)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+	}
+	return c.JSON(http.StatusOK, GetContainerResponse{
+		ContainerID: info.ID,
+		Image:       info.Image,
+		Status:      "unknown",
+		Namespace:   h.namespace,
+		TaskRunning: h.isTaskRunning(ctx, containerID),
+		CreatedAt:   info.CreatedAt,
+		UpdatedAt:   info.UpdatedAt,
+	})
+}
+
+// DeleteContainer godoc
+// @Summary Delete MCP container for bot
+// @Tags containerd
+// @Param bot_id path string true "Bot ID"
+// @Success 204
+// @Failure 404 {object} ErrorResponse
+// @Failure 500 {object} ErrorResponse
+// @Router /bots/{bot_id}/container [delete]
+func (h *ContainerdHandler) DeleteContainer(c echo.Context) error {
+	botID, err := h.requireBotAccess(c)
+	if err != nil {
+		return err
+	}
+	if err := h.CleanupBotContainer(c.Request().Context(), botID); err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+	}
 	return c.NoContent(http.StatusNoContent)
 }
 
+// StartContainer godoc
+// @Summary Start container task for bot
+// @Tags containerd
+// @Param bot_id path string true "Bot ID"
+// @Success 200 {object} object
+// @Failure 404 {object} ErrorResponse
+// @Failure 500 {object} ErrorResponse
+// @Router /bots/{bot_id}/container/start [post]
+func (h *ContainerdHandler) StartContainer(c echo.Context) error {
+	botID, err := h.requireBotAccess(c)
+	if err != nil {
+		return err
+	}
+	ctx := c.Request().Context()
+	containerID, err := h.botContainerID(ctx, botID)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusNotFound, "container not found for bot")
+	}
+	if err := h.ensureTaskRunning(ctx, containerID); err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+	}
+	if h.queries != nil {
+		if pgBotID, parseErr := parsePgUUID(botID); parseErr == nil {
+			_ = h.queries.UpdateContainerStarted(ctx, pgBotID)
+		}
+	}
+	return c.JSON(http.StatusOK, map[string]bool{"started": true})
+}
+
+// StopContainer godoc
+// @Summary Stop container task for bot
+// @Tags containerd
+// @Param bot_id path string true "Bot ID"
+// @Success 200 {object} object
+// @Failure 404 {object} ErrorResponse
+// @Failure 500 {object} ErrorResponse
+// @Router /bots/{bot_id}/container/stop [post]
+func (h *ContainerdHandler) StopContainer(c echo.Context) error {
+	botID, err := h.requireBotAccess(c)
+	if err != nil {
+		return err
+	}
+	ctx := c.Request().Context()
+	containerID, err := h.botContainerID(ctx, botID)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusNotFound, "container not found for bot")
+	}
+	if err := h.service.StopTask(ctx, containerID, &ctr.StopTaskOptions{
+		Timeout: 10 * time.Second,
+		Force:   true,
+	}); err != nil && !errdefs.IsNotFound(err) {
+		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+	}
+	_ = h.service.DeleteTask(ctx, containerID, &ctr.DeleteTaskOptions{Force: true})
+	if h.queries != nil {
+		if pgBotID, parseErr := parsePgUUID(botID); parseErr == nil {
+			_ = h.queries.UpdateContainerStopped(ctx, pgBotID)
+		}
+	}
+	return c.JSON(http.StatusOK, map[string]bool{"stopped": true})
+}
+
 // CreateSnapshot godoc
-// @Summary Create container snapshot
+// @Summary Create container snapshot for bot
 // @Tags containerd
 // @Param bot_id path string true "Bot ID"
 // @Param payload body CreateSnapshotRequest true "Create snapshot payload"
 // @Success 200 {object} CreateSnapshotResponse
+// @Failure 404 {object} ErrorResponse
+// @Failure 500 {object} ErrorResponse
 // @Router /bots/{bot_id}/container/snapshots [post]
 func (h *ContainerdHandler) CreateSnapshot(c echo.Context) error {
-	if _, err := h.requireBotAccess(c); err != nil {
+	botID, err := h.requireBotAccess(c)
+	if err != nil {
 		return err
 	}
 	var req CreateSnapshotRequest
 	if err := c.Bind(&req); err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
 	}
-	if strings.TrimSpace(req.ContainerID) == "" {
-		return echo.NewHTTPError(http.StatusBadRequest, "container_id is required")
+	ctx := c.Request().Context()
+	containerID, err := h.botContainerID(ctx, botID)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusNotFound, "container not found for bot")
 	}
-	container, err := h.service.GetContainer(c.Request().Context(), req.ContainerID)
+	container, err := h.service.GetContainer(ctx, containerID)
 	if err != nil {
 		if errdefs.IsNotFound(err) {
 			return echo.NewHTTPError(http.StatusNotFound, "container not found")
 		}
 		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 	}
-	ctx := c.Request().Context()
+	infoCtx := ctx
 	if strings.TrimSpace(h.namespace) != "" {
-		ctx = namespaces.WithNamespace(ctx, h.namespace)
+		infoCtx = namespaces.WithNamespace(ctx, h.namespace)
 	}
-	info, err := container.Info(ctx)
+	info, err := container.Info(infoCtx)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 	}
 	snapshotName := strings.TrimSpace(req.SnapshotName)
 	if snapshotName == "" {
-		snapshotName = req.ContainerID + "-" + time.Now().Format("20060102150405")
+		snapshotName = containerID + "-" + time.Now().Format("20060102150405")
 	}
-	if err := h.service.CommitSnapshot(c.Request().Context(), info.Snapshotter, snapshotName, info.SnapshotKey); err != nil {
+	if err := h.service.CommitSnapshot(ctx, info.Snapshotter, snapshotName, info.SnapshotKey); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 	}
-
 	return c.JSON(http.StatusOK, CreateSnapshotResponse{
-		ContainerID:  req.ContainerID,
+		ContainerID:  containerID,
 		SnapshotName: snapshotName,
 		Snapshotter:  info.Snapshotter,
 	})
@@ -549,6 +639,45 @@ func (h *ContainerdHandler) authorizeBotAccess(ctx context.Context, actorID, bot
 		return bots.Bot{}, echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 	}
 	return bot, nil
+}
+
+// CleanupBotContainer removes the containerd container and DB record for a bot.
+func (h *ContainerdHandler) CleanupBotContainer(ctx context.Context, botID string) error {
+	containerID, err := h.botContainerID(ctx, botID)
+	if err != nil {
+		if h.queries != nil {
+			if pgBotID, parseErr := parsePgUUID(botID); parseErr == nil {
+				_ = h.queries.DeleteContainerByBotID(ctx, pgBotID)
+			}
+		}
+		return nil
+	}
+
+	_ = h.service.StopTask(ctx, containerID, &ctr.StopTaskOptions{
+		Timeout: 5 * time.Second,
+		Force:   true,
+	})
+	_ = h.service.DeleteTask(ctx, containerID, &ctr.DeleteTaskOptions{Force: true})
+
+	if err := h.service.DeleteContainer(ctx, containerID, &ctr.DeleteContainerOptions{
+		CleanupSnapshot: true,
+	}); err != nil && !errdefs.IsNotFound(err) {
+		return err
+	}
+
+	if h.queries != nil {
+		if pgBotID, parseErr := parsePgUUID(botID); parseErr == nil {
+			_ = h.queries.DeleteContainerByBotID(ctx, pgBotID)
+		}
+	}
+	return nil
+}
+
+func (h *ContainerdHandler) isTaskRunning(ctx context.Context, containerID string) bool {
+	tasks, err := h.service.ListTasks(ctx, &ctr.ListTasksOptions{
+		Filter: "container.id==" + containerID,
+	})
+	return err == nil && len(tasks) > 0 && tasks[0].Status == tasktypes.Status_RUNNING
 }
 
 func parsePgUUID(id string) (pgtype.UUID, error) {

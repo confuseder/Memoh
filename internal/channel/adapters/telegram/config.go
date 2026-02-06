@@ -7,16 +7,19 @@ import (
 	"github.com/memohai/memoh/internal/channel"
 )
 
+// Config holds the Telegram bot credentials extracted from a channel configuration.
 type Config struct {
 	BotToken string
 }
 
+// UserConfig holds the identifiers used to target a Telegram user or group.
 type UserConfig struct {
 	Username string
 	UserID   string
 	ChatID   string
 }
 
+// NormalizeConfig validates and normalizes a Telegram channel configuration map.
 func NormalizeConfig(raw map[string]any) (map[string]any, error) {
 	cfg, err := parseConfig(raw)
 	if err != nil {
@@ -27,6 +30,7 @@ func NormalizeConfig(raw map[string]any) (map[string]any, error) {
 	}, nil
 }
 
+// NormalizeUserConfig validates and normalizes a Telegram user-binding configuration map.
 func NormalizeUserConfig(raw map[string]any) (map[string]any, error) {
 	cfg, err := parseUserConfig(raw)
 	if err != nil {
@@ -45,6 +49,7 @@ func NormalizeUserConfig(raw map[string]any) (map[string]any, error) {
 	return result, nil
 }
 
+// ResolveTarget derives a Telegram delivery target from a user-binding configuration.
 func ResolveTarget(raw map[string]any) (string, error) {
 	cfg, err := parseUserConfig(raw)
 	if err != nil {
@@ -66,6 +71,7 @@ func ResolveTarget(raw map[string]any) (string, error) {
 	return "", fmt.Errorf("telegram binding is incomplete")
 }
 
+// MatchBinding reports whether a Telegram user binding matches the given criteria.
 func MatchBinding(raw map[string]any, criteria channel.BindingCriteria) bool {
 	cfg, err := parseUserConfig(raw)
 	if err != nil {
@@ -88,6 +94,7 @@ func MatchBinding(raw map[string]any, criteria channel.BindingCriteria) bool {
 	return false
 }
 
+// BuildUserConfig constructs a Telegram user-binding config from an Identity.
 func BuildUserConfig(identity channel.Identity) map[string]any {
 	result := map[string]any{}
 	if value := strings.TrimSpace(identity.Attribute("username")); value != "" {

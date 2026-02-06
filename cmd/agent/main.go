@@ -99,6 +99,7 @@ func main() {
 	usersService := users.NewService(logger.L, queries)
 
 	containerdHandler := handlers.NewContainerdHandler(logger.L, service, cfg.MCP, cfg.Containerd.Namespace, botService, usersService, queries)
+	botService.SetContainerLifecycle(containerdHandler)
 
 	if err := ensureAdminUser(ctx, logger.L, queries, cfg); err != nil {
 		logger.Error("ensure admin user", slog.Any("error", err))

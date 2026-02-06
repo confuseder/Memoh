@@ -11,6 +11,15 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const deleteContainerByBotID = `-- name: DeleteContainerByBotID :exec
+DELETE FROM containers WHERE bot_id = $1
+`
+
+func (q *Queries) DeleteContainerByBotID(ctx context.Context, botID pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, deleteContainerByBotID, botID)
+	return err
+}
+
 const getContainerByBotID = `-- name: GetContainerByBotID :one
 SELECT id, bot_id, container_id, container_name, image, status, namespace, auto_start, host_path, container_path, created_at, updated_at, last_started_at, last_stopped_at FROM containers WHERE bot_id = $1 ORDER BY updated_at DESC LIMIT 1
 `
@@ -61,6 +70,44 @@ func (q *Queries) GetContainerByContainerID(ctx context.Context, containerID str
 		&i.LastStoppedAt,
 	)
 	return i, err
+}
+
+const updateContainerStarted = `-- name: UpdateContainerStarted :exec
+UPDATE containers
+SET status = 'running', last_started_at = now(), updated_at = now()
+WHERE bot_id = $1
+`
+
+func (q *Queries) UpdateContainerStarted(ctx context.Context, botID pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, updateContainerStarted, botID)
+	return err
+}
+
+const updateContainerStatus = `-- name: UpdateContainerStatus :exec
+UPDATE containers
+SET status = $1, updated_at = now()
+WHERE bot_id = $2
+`
+
+type UpdateContainerStatusParams struct {
+	Status string      `json:"status"`
+	BotID  pgtype.UUID `json:"bot_id"`
+}
+
+func (q *Queries) UpdateContainerStatus(ctx context.Context, arg UpdateContainerStatusParams) error {
+	_, err := q.db.Exec(ctx, updateContainerStatus, arg.Status, arg.BotID)
+	return err
+}
+
+const updateContainerStopped = `-- name: UpdateContainerStopped :exec
+UPDATE containers
+SET status = 'stopped', last_stopped_at = now(), updated_at = now()
+WHERE bot_id = $1
+`
+
+func (q *Queries) UpdateContainerStopped(ctx context.Context, botID pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, updateContainerStopped, botID)
+	return err
 }
 
 const upsertContainer = `-- name: UpsertContainer :exec

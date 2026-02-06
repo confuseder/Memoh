@@ -20,10 +20,12 @@ import (
 	"github.com/memohai/memoh/internal/channel/adapters/common"
 )
 
+// FeishuAdapter implements the channel.Adapter, channel.Sender, and channel.Receiver interfaces for Feishu.
 type FeishuAdapter struct {
 	logger *slog.Logger
 }
 
+// NewFeishuAdapter creates a FeishuAdapter with the given logger.
 func NewFeishuAdapter(log *slog.Logger) *FeishuAdapter {
 	if log == nil {
 		log = slog.Default()
@@ -33,10 +35,12 @@ func NewFeishuAdapter(log *slog.Logger) *FeishuAdapter {
 	}
 }
 
+// Type returns the Feishu channel type.
 func (a *FeishuAdapter) Type() channel.ChannelType {
 	return Type
 }
 
+// Connect establishes a WebSocket connection to Feishu and forwards inbound messages to the handler.
 func (a *FeishuAdapter) Connect(ctx context.Context, cfg channel.ChannelConfig, handler channel.InboundHandler) (channel.Connection, error) {
 	if a.logger != nil {
 		a.logger.Info("start", slog.String("config_id", cfg.ID))
@@ -101,6 +105,7 @@ func (a *FeishuAdapter) Connect(ctx context.Context, cfg channel.ChannelConfig, 
 	return channel.NewConnection(cfg, stop), nil
 }
 
+// Send delivers an outbound message to Feishu, handling attachments, rich text, and replies.
 func (a *FeishuAdapter) Send(ctx context.Context, cfg channel.ChannelConfig, msg channel.OutboundMessage) error {
 	feishuCfg, err := parseConfig(cfg.Credentials)
 	if err != nil {
@@ -117,7 +122,6 @@ func (a *FeishuAdapter) Send(ctx context.Context, cfg channel.ChannelConfig, msg
 
 	client := lark.NewClient(feishuCfg.AppID, feishuCfg.AppSecret)
 
-	// 1. 处理附件
 	if len(msg.Message.Attachments) > 0 {
 		for _, att := range msg.Message.Attachments {
 			if err := a.sendAttachment(ctx, client, receiveID, receiveType, att, msg.Message.Text); err != nil {
@@ -127,25 +131,27 @@ func (a *FeishuAdapter) Send(ctx context.Context, cfg channel.ChannelConfig, msg
 		return nil
 	}
 
-	// 2. 处理富文本或普通文本
 	var msgType string
 	var content string
 
 	if len(msg.Message.Parts) > 1 {
 		msgType = larkim.MsgTypePost
-		content, err = a.buildPostContent(msg.Message)
+		postContent, postErr := a.buildPostContent(msg.Message)
+		if postErr != nil {
+			return postErr
+		}
+		content = postContent
 	} else {
 		msgType = larkim.MsgTypeText
 		text := strings.TrimSpace(msg.Message.PlainText())
 		if text == "" {
 			return fmt.Errorf("message is required")
 		}
-		payload, _ := json.Marshal(map[string]string{"text": text})
+		payload, marshalErr := json.Marshal(map[string]string{"text": text})
+		if marshalErr != nil {
+			return fmt.Errorf("failed to marshal text content: %w", marshalErr)
+		}
 		content = string(payload)
-	}
-
-	if err != nil {
-		return err
 	}
 
 	reqBuilder := larkim.NewCreateMessageReqBodyBuilder().
@@ -159,7 +165,6 @@ func (a *FeishuAdapter) Send(ctx context.Context, cfg channel.ChannelConfig, msg
 		Body(reqBuilder.Build()).
 		Build()
 
-	// 处理回复
 	if msg.Message.Reply != nil && msg.Message.Reply.MessageID != "" {
 		replyReq := larkim.NewReplyMessageReqBuilder().
 			MessageId(msg.Message.Reply.MessageID).
@@ -228,8 +233,12 @@ func (a *FeishuAdapter) handleResponse(configID string, resp *larkim.CreateMessa
 }
 
 func (a *FeishuAdapter) sendAttachment(ctx context.Context, client *lark.Client, receiveID, receiveType string, att channel.Attachment, text string) error {
-	// 下载文件
-	resp, err := http.Get(att.URL)
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, att.URL, nil)
+	if err != nil {
+		return fmt.Errorf("failed to build download request: %w", err)
+	}
+	httpClient := &http.Client{Timeout: 60 * time.Second}
+	resp, err := httpClient.Do(httpReq)
 	if err != nil {
 		return fmt.Errorf("failed to download attachment: %w", err)
 	}
@@ -243,7 +252,6 @@ func (a *FeishuAdapter) sendAttachment(ctx context.Context, client *lark.Client,
 	var contentMap map[string]string
 
 	if strings.HasPrefix(att.Mime, "image/") || att.Type == channel.AttachmentImage {
-		// 上传图片
 		uploadReq := larkim.NewCreateImageReqBuilder().
 			Body(larkim.NewCreateImageReqBodyBuilder().
 				ImageType(larkim.ImageTypeMessage).
@@ -251,29 +259,46 @@ func (a *FeishuAdapter) sendAttachment(ctx context.Context, client *lark.Client,
 				Build()).
 			Build()
 		uploadResp, err := client.Im.V1.Image.Create(ctx, uploadReq)
-		if err != nil || !uploadResp.Success() {
+		if err != nil {
 			return fmt.Errorf("failed to upload image: %w", err)
+		}
+		if uploadResp == nil || !uploadResp.Success() {
+			code, msg := 0, ""
+			if uploadResp != nil {
+				code, msg = uploadResp.Code, uploadResp.Msg
+			}
+			return fmt.Errorf("failed to upload image: %s (code: %d)", msg, code)
 		}
 		msgType = larkim.MsgTypeImage
 		contentMap = map[string]string{"image_key": *uploadResp.Data.ImageKey}
 	} else {
-		// 上传文件
+		fileType := resolveFeishuFileType(att.Name, att.Mime)
 		uploadReq := larkim.NewCreateFileReqBuilder().
 			Body(larkim.NewCreateFileReqBodyBuilder().
-				FileType(larkim.FileTypePdf). // 默认为 pdf，飞书支持 mp4, doc, xls, ppt, pdf, zip
+				FileType(fileType).
 				FileName(att.Name).
 				File(resp.Body).
 				Build()).
 			Build()
 		uploadResp, err := client.Im.V1.File.Create(ctx, uploadReq)
-		if err != nil || !uploadResp.Success() {
+		if err != nil {
 			return fmt.Errorf("failed to upload file: %w", err)
+		}
+		if uploadResp == nil || !uploadResp.Success() {
+			code, msg := 0, ""
+			if uploadResp != nil {
+				code, msg = uploadResp.Code, uploadResp.Msg
+			}
+			return fmt.Errorf("failed to upload file: %s (code: %d)", msg, code)
 		}
 		msgType = larkim.MsgTypeFile
 		contentMap = map[string]string{"file_key": *uploadResp.Data.FileKey}
 	}
 
-	content, _ := json.Marshal(contentMap)
+	content, err := json.Marshal(contentMap)
+	if err != nil {
+		return fmt.Errorf("failed to marshal content: %w", err)
+	}
 	req := larkim.NewCreateMessageReqBuilder().
 		ReceiveIdType(receiveType).
 		Body(larkim.NewCreateMessageReqBodyBuilder().
@@ -284,12 +309,32 @@ func (a *FeishuAdapter) sendAttachment(ctx context.Context, client *lark.Client,
 			Build()).
 		Build()
 
-	_, err = client.Im.V1.Message.Create(ctx, req)
-	return err
+	sendResp, err := client.Im.V1.Message.Create(ctx, req)
+	return a.handleResponse("", sendResp, err)
+}
+
+// resolveFeishuFileType maps MIME type and filename to a Feishu file type constant.
+func resolveFeishuFileType(name, mime string) string {
+	lower := strings.ToLower(mime)
+	switch {
+	case strings.Contains(lower, "mp4") || strings.Contains(lower, "video"):
+		return larkim.FileTypeMp4
+	case strings.Contains(lower, "pdf"):
+		return larkim.FileTypePdf
+	case strings.Contains(lower, "word") || strings.Contains(lower, "msword") || strings.HasSuffix(strings.ToLower(name), ".doc") || strings.HasSuffix(strings.ToLower(name), ".docx"):
+		return larkim.FileTypeDoc
+	case strings.Contains(lower, "excel") || strings.Contains(lower, "spreadsheet") || strings.HasSuffix(strings.ToLower(name), ".xls") || strings.HasSuffix(strings.ToLower(name), ".xlsx"):
+		return larkim.FileTypeXls
+	case strings.Contains(lower, "powerpoint") || strings.Contains(lower, "presentation") || strings.HasSuffix(strings.ToLower(name), ".ppt") || strings.HasSuffix(strings.ToLower(name), ".pptx"):
+		return larkim.FileTypePpt
+	case strings.Contains(lower, "zip") || strings.Contains(lower, "compressed") || strings.Contains(lower, "archive"):
+		return "zip"
+	default:
+		return larkim.FileTypePdf
+	}
 }
 
 func (a *FeishuAdapter) buildPostContent(msg channel.Message) (string, error) {
-	// 简单的 Post 构建逻辑
 	type postContent struct {
 		ZhCn struct {
 			Title   string  `json:"title"`
@@ -298,7 +343,7 @@ func (a *FeishuAdapter) buildPostContent(msg channel.Message) (string, error) {
 	}
 
 	pc := postContent{}
-	pc.ZhCn.Title = "" // 暂时不设标题
+	pc.ZhCn.Title = ""
 
 	line := []any{}
 	for _, part := range msg.Parts {
@@ -326,7 +371,6 @@ func extractFeishuInbound(event *larkim.P2MessageReceiveV1) channel.InboundMessa
 		msg.ID = *message.MessageId
 	}
 
-	// 解析内容
 	var contentMap map[string]any
 	if message.Content != nil {
 		_ = json.Unmarshal([]byte(*message.Content), &contentMap)
@@ -342,7 +386,7 @@ func extractFeishuInbound(event *larkim.P2MessageReceiveV1) channel.InboundMessa
 			if key, ok := contentMap["image_key"].(string); ok {
 				msg.Attachments = append(msg.Attachments, channel.Attachment{
 					Type: channel.AttachmentImage,
-					URL:  key, // 飞书内部 key，上层需注意
+					URL:  key,
 				})
 			}
 		case larkim.MsgTypeFile, larkim.MsgTypeAudio:
@@ -357,7 +401,6 @@ func extractFeishuInbound(event *larkim.P2MessageReceiveV1) channel.InboundMessa
 		}
 	}
 
-	// 处理回复引用
 	if message.ParentId != nil && *message.ParentId != "" {
 		msg.Reply = &channel.ReplyRef{
 			MessageID: *message.ParentId,

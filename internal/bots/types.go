@@ -1,6 +1,9 @@
 package bots
 
-import "time"
+import (
+	"context"
+	"time"
+)
 
 type Bot struct {
 	ID          string         `json:"id"`
@@ -51,6 +54,11 @@ type ListBotsResponse struct {
 
 type ListMembersResponse struct {
 	Items []BotMember `json:"items"`
+}
+
+// ContainerLifecycle handles container lifecycle events bound to bot operations.
+type ContainerLifecycle interface {
+	CleanupBotContainer(ctx context.Context, botID string) error
 }
 
 const (

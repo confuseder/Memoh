@@ -6,6 +6,7 @@ import (
 	"sync"
 )
 
+// ChannelDescriptor holds all metadata and hooks for a registered channel type.
 type ChannelDescriptor struct {
 	Type                ChannelType
 	DisplayName         string
@@ -32,6 +33,7 @@ var registry = &channelRegistry{
 	items: map[ChannelType]ChannelDescriptor{},
 }
 
+// RegisterChannel adds a channel descriptor to the global registry.
 func RegisterChannel(desc ChannelDescriptor) error {
 	normalized := normalizeChannelType(string(desc.Type))
 	if normalized == "" {
@@ -50,12 +52,14 @@ func RegisterChannel(desc ChannelDescriptor) error {
 	return nil
 }
 
+// MustRegisterChannel calls RegisterChannel and panics on error.
 func MustRegisterChannel(desc ChannelDescriptor) {
 	if err := RegisterChannel(desc); err != nil {
 		panic(err)
 	}
 }
 
+// UnregisterChannel removes a channel type from the global registry.
 func UnregisterChannel(channelType ChannelType) bool {
 	normalized := normalizeChannelType(channelType.String())
 	if normalized == "" {
@@ -70,6 +74,7 @@ func UnregisterChannel(channelType ChannelType) bool {
 	return true
 }
 
+// GetChannelDescriptor returns the descriptor for the given channel type.
 func GetChannelDescriptor(channelType ChannelType) (ChannelDescriptor, bool) {
 	normalized := normalizeChannelType(channelType.String())
 	registry.mu.RLock()
@@ -78,6 +83,7 @@ func GetChannelDescriptor(channelType ChannelType) (ChannelDescriptor, bool) {
 	return desc, ok
 }
 
+// ListChannelDescriptors returns all registered channel descriptors.
 func ListChannelDescriptors() []ChannelDescriptor {
 	registry.mu.RLock()
 	defer registry.mu.RUnlock()
@@ -88,6 +94,7 @@ func ListChannelDescriptors() []ChannelDescriptor {
 	return items
 }
 
+// GetChannelCapabilities returns the capability matrix for the given channel type.
 func GetChannelCapabilities(channelType ChannelType) (ChannelCapabilities, bool) {
 	desc, ok := GetChannelDescriptor(channelType)
 	if !ok {
@@ -96,6 +103,7 @@ func GetChannelCapabilities(channelType ChannelType) (ChannelCapabilities, bool)
 	return desc.Capabilities, true
 }
 
+// GetChannelOutboundPolicy returns the outbound policy for the given channel type.
 func GetChannelOutboundPolicy(channelType ChannelType) (OutboundPolicy, bool) {
 	desc, ok := GetChannelDescriptor(channelType)
 	if !ok {
@@ -104,6 +112,7 @@ func GetChannelOutboundPolicy(channelType ChannelType) (OutboundPolicy, bool) {
 	return desc.OutboundPolicy, true
 }
 
+// GetChannelConfigSchema returns the configuration schema for the given channel type.
 func GetChannelConfigSchema(channelType ChannelType) (ConfigSchema, bool) {
 	desc, ok := GetChannelDescriptor(channelType)
 	if !ok {
@@ -112,6 +121,7 @@ func GetChannelConfigSchema(channelType ChannelType) (ConfigSchema, bool) {
 	return desc.ConfigSchema, true
 }
 
+// GetChannelUserConfigSchema returns the user-binding configuration schema for the given channel type.
 func GetChannelUserConfigSchema(channelType ChannelType) (ConfigSchema, bool) {
 	desc, ok := GetChannelDescriptor(channelType)
 	if !ok {
@@ -120,6 +130,7 @@ func GetChannelUserConfigSchema(channelType ChannelType) (ConfigSchema, bool) {
 	return desc.UserConfigSchema, true
 }
 
+// IsConfigless reports whether the channel type operates without per-bot configuration.
 func IsConfigless(channelType ChannelType) bool {
 	desc, ok := GetChannelDescriptor(channelType)
 	if !ok {

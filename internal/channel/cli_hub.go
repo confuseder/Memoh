@@ -6,17 +6,21 @@ import (
 	"github.com/google/uuid"
 )
 
+// SessionHub is a pub/sub hub that routes outbound messages to CLI/Web session subscribers.
 type SessionHub struct {
 	mu       sync.RWMutex
 	sessions map[string]map[string]chan OutboundMessage
 }
 
+// NewSessionHub creates an empty SessionHub.
 func NewSessionHub() *SessionHub {
 	return &SessionHub{
 		sessions: map[string]map[string]chan OutboundMessage{},
 	}
 }
 
+// Subscribe registers a new stream for the given session and returns a stream ID,
+// a read-only channel for messages, and a cancel function to unsubscribe.
 func (h *SessionHub) Subscribe(sessionID string) (string, <-chan OutboundMessage, func()) {
 	streamID := uuid.NewString()
 	ch := make(chan OutboundMessage, 32)
@@ -48,17 +52,14 @@ func (h *SessionHub) Subscribe(sessionID string) (string, <-chan OutboundMessage
 	return streamID, ch, cancel
 }
 
+// Publish delivers a message to all subscribers of the given session.
+// Slow receivers are silently dropped.
 func (h *SessionHub) Publish(sessionID string, msg OutboundMessage) {
 	h.mu.RLock()
-	streams := h.sessions[sessionID]
-	h.mu.RUnlock()
-	if len(streams) == 0 {
-		return
-	}
-
-	for _, stream := range streams {
+	defer h.mu.RUnlock()
+	for _, ch := range h.sessions[sessionID] {
 		select {
-		case stream <- msg:
+		case ch <- msg:
 		default:
 			// Drop if receiver is slow.
 		}

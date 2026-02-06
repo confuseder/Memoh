@@ -428,7 +428,7 @@ definitions:
         type: integer
       messages:
         items:
-          $ref: '#/definitions/chat.GatewayMessage'
+          $ref: '#/definitions/chat.ModelMessage'
         type: array
       model:
         type: string
@@ -445,7 +445,7 @@ definitions:
     properties:
       messages:
         items:
-          $ref: '#/definitions/chat.GatewayMessage'
+          $ref: '#/definitions/chat.ModelMessage'
         type: array
       model:
         type: string
@@ -456,8 +456,38 @@ definitions:
           type: string
         type: array
     type: object
-  chat.GatewayMessage:
-    additionalProperties: {}
+  chat.ModelMessage:
+    properties:
+      content:
+        items:
+          type: integer
+        type: array
+      name:
+        type: string
+      role:
+        type: string
+      tool_call_id:
+        type: string
+      tool_calls:
+        items:
+          $ref: '#/definitions/chat.ToolCall'
+        type: array
+    type: object
+  chat.ToolCall:
+    properties:
+      function:
+        $ref: '#/definitions/chat.ToolCallFunction'
+      id:
+        type: string
+      type:
+        type: string
+    type: object
+  chat.ToolCallFunction:
+    properties:
+      arguments:
+        type: string
+      name:
+        type: string
     type: object
   handlers.ChannelMeta:
     properties:
@@ -476,29 +506,8 @@ definitions:
       user_config_schema:
         $ref: '#/definitions/channel.ConfigSchema'
     type: object
-  handlers.ContainerInfo:
-    properties:
-      created_at:
-        type: string
-      id:
-        type: string
-      image:
-        type: string
-      labels:
-        additionalProperties:
-          type: string
-        type: object
-      snapshot_key:
-        type: string
-      snapshotter:
-        type: string
-      updated_at:
-        type: string
-    type: object
   handlers.CreateContainerRequest:
     properties:
-      container_id:
-        type: string
       image:
         type: string
       snapshotter:
@@ -517,8 +526,6 @@ definitions:
     type: object
   handlers.CreateSnapshotRequest:
     properties:
-      container_id:
-        type: string
       snapshot_name:
         type: string
     type: object
@@ -593,12 +600,26 @@ definitions:
       message:
         type: string
     type: object
-  handlers.ListContainersResponse:
+  handlers.GetContainerResponse:
     properties:
-      containers:
-        items:
-          $ref: '#/definitions/handlers.ContainerInfo'
-        type: array
+      container_id:
+        type: string
+      container_path:
+        type: string
+      created_at:
+        type: string
+      host_path:
+        type: string
+      image:
+        type: string
+      namespace:
+        type: string
+      status:
+        type: string
+      task_running:
+        type: boolean
+      updated_at:
+        type: string
     type: object
   handlers.ListSnapshotsResponse:
     properties:
@@ -1458,6 +1479,50 @@ paths:
       tags:
       - chat
   /bots/{bot_id}/container:
+    delete:
+      parameters:
+      - description: Bot ID
+        in: path
+        name: bot_id
+        required: true
+        type: string
+      responses:
+        "204":
+          description: No Content
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+      summary: Delete MCP container for bot
+      tags:
+      - containerd
+    get:
+      parameters:
+      - description: Bot ID
+        in: path
+        name: bot_id
+        required: true
+        type: string
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.GetContainerResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+      summary: Get container info for bot
+      tags:
+      - containerd
     post:
       parameters:
       - description: Bot ID
@@ -1485,57 +1550,6 @@ paths:
           schema:
             $ref: '#/definitions/handlers.ErrorResponse'
       summary: Create and start MCP container for bot
-      tags:
-      - containerd
-  /bots/{bot_id}/container/{id}:
-    delete:
-      parameters:
-      - description: Bot ID
-        in: path
-        name: bot_id
-        required: true
-        type: string
-      - description: Container ID
-        in: path
-        name: id
-        required: true
-        type: string
-      responses:
-        "204":
-          description: No Content
-        "400":
-          description: Bad Request
-          schema:
-            $ref: '#/definitions/handlers.ErrorResponse'
-        "404":
-          description: Not Found
-          schema:
-            $ref: '#/definitions/handlers.ErrorResponse'
-        "500":
-          description: Internal Server Error
-          schema:
-            $ref: '#/definitions/handlers.ErrorResponse'
-      summary: Delete MCP container
-      tags:
-      - containerd
-  /bots/{bot_id}/container/list:
-    get:
-      parameters:
-      - description: Bot ID
-        in: path
-        name: bot_id
-        required: true
-        type: string
-      responses:
-        "200":
-          description: OK
-          schema:
-            $ref: '#/definitions/handlers.ListContainersResponse'
-        "500":
-          description: Internal Server Error
-          schema:
-            $ref: '#/definitions/handlers.ErrorResponse'
-      summary: List containers for bot
       tags:
       - containerd
   /bots/{bot_id}/container/snapshots:
@@ -1576,7 +1590,63 @@ paths:
           description: OK
           schema:
             $ref: '#/definitions/handlers.CreateSnapshotResponse'
-      summary: Create container snapshot
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+      summary: Create container snapshot for bot
+      tags:
+      - containerd
+  /bots/{bot_id}/container/start:
+    post:
+      parameters:
+      - description: Bot ID
+        in: path
+        name: bot_id
+        required: true
+        type: string
+      responses:
+        "200":
+          description: OK
+          schema:
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+      summary: Start container task for bot
+      tags:
+      - containerd
+  /bots/{bot_id}/container/stop:
+    post:
+      parameters:
+      - description: Bot ID
+        in: path
+        name: bot_id
+        required: true
+        type: string
+      responses:
+        "200":
+          description: OK
+          schema:
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+      summary: Stop container task for bot
       tags:
       - containerd
   /bots/{bot_id}/history:

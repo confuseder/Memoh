@@ -1,7 +1,7 @@
 package channel
 
-// ChannelCapabilities 描述通道在功能层面的能力矩阵。
-// 该结构用于上层自适应逻辑，不依赖具体适配器实现。
+// ChannelCapabilities describes the feature matrix of a channel type.
+// It is used by the outbound layer to validate message content before delivery.
 type ChannelCapabilities struct {
 	Text           bool     `json:"text"`
 	Markdown       bool     `json:"markdown"`
