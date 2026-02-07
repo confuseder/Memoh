@@ -81,7 +81,6 @@ run = "scripts/compile-mcp.sh"
 description = "Start development environment"
 depends = [
   "//:swagger-generate",
-  "//:sqlc-generate",
   "//agent:dev",
   "//cmd/agent:start",
   "//packages/web:dev",
@@ -90,6 +89,7 @@ depends = [
 [tasks.setup]
 description = "Setup development environment"
 depends = [
+  "//:sqlc-generate",
   "//:db-up",
   "//:pnpm-install",
   "//:go-install",
