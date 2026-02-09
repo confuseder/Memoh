@@ -5,7 +5,52 @@ if [ "$(uname -s)" != "Darwin" ]; then
   exit 0
 fi
 
+host_yaml="$HOME/.lima/default/lima.yaml"
+if [ -f "$host_yaml" ]; then
+  if ! awk '
+    BEGIN {in=0; entries=0}
+    /^portForwards:/ {in=1; next}
+    in && /^[^ ]/ {in=0}
+    in && /^  - / {entries=1; exit}
+    END {if (entries) exit 0; else exit 1}
+  ' "$host_yaml"; then
+    tmp="${host_yaml}.tmp"
+    awk '
+      BEGIN {found=0; inserted=0}
+      /^portForwards: *\[/ {
+        found=1
+        print "portForwards:"
+        if (!inserted) {
+          print "  - guestSocket: \"/run/containerd/containerd.sock\""
+          print "    hostSocket: \"{{.Dir}}/sock/containerd/containerd.sock\""
+          inserted=1
+        }
+        next
+      }
+      /^portForwards:/ {
+        found=1
+        print
+        if (!inserted) {
+          print "  - guestSocket: \"/run/containerd/containerd.sock\""
+          print "    hostSocket: \"{{.Dir}}/sock/containerd/containerd.sock\""
+          inserted=1
+        }
+        next
+      }
+      {print}
+      END {
+        if (!found) {
+          print "portForwards:"
+          print "  - guestSocket: \"/run/containerd/containerd.sock\""
+          print "    hostSocket: \"{{.Dir}}/sock/containerd/containerd.sock\""
+        }
+      }
+    ' "$host_yaml" > "$tmp" && mv "$tmp" "$host_yaml"
+  fi
+fi
+
 limactl start default
+limactl shell default -- sudo -n chmod 666 /run/containerd/containerd.sock
 
 if ! limactl shell default -- sh -lc 'command -v memoh-cli >/dev/null 2>&1'; then
   vm_arch=$(limactl shell default -- uname -m)

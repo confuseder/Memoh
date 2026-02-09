@@ -61,6 +61,16 @@ func SetupNetwork(ctx context.Context, task client.Task, containerID string) err
 		return err
 	}
 	_, err = cni.Setup(ctx, containerID, netnsPath)
+	if err == nil {
+		return nil
+	}
+	if !isDuplicateAllocationError(err) {
+		return err
+	}
+	if rmErr := cni.Remove(ctx, containerID, netnsPath); rmErr != nil {
+		return rmErr
+	}
+	_, err = cni.Setup(ctx, containerID, netnsPath)
 	return err
 }
 
@@ -84,9 +94,25 @@ func setupNetworkWithCLI(ctx context.Context, containerID string, pid uint32) er
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
 		if stderr.Len() > 0 {
-			return fmt.Errorf("cni cli failed: %s", strings.TrimSpace(stderr.String()))
+			cniErr := fmt.Errorf("cni cli failed: %s", strings.TrimSpace(stderr.String()))
+			if !isDuplicateAllocationError(cniErr) {
+				return cniErr
+			}
+		} else if !isDuplicateAllocationError(err) {
+			return err
 		}
-		return err
+		if rmErr := removeNetworkWithCLI(ctx, containerID, pid); rmErr != nil {
+			return rmErr
+		}
+		cmd = exec.CommandContext(ctx, "limactl", args...)
+		stderr.Reset()
+		cmd.Stderr = &stderr
+		if err := cmd.Run(); err != nil {
+			if stderr.Len() > 0 {
+				return fmt.Errorf("cni cli failed: %s", strings.TrimSpace(stderr.String()))
+			}
+			return err
+		}
 	}
 	return nil
 }
@@ -161,4 +187,11 @@ func removeNetworkWithCLI(ctx context.Context, containerID string, pid uint32) e
 		return err
 	}
 	return nil
+}
+
+func isDuplicateAllocationError(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(err.Error(), "duplicate allocation")
 }
