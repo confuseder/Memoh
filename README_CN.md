@@ -51,6 +51,12 @@ Memoh Bot 能够区分并记忆来自多个人类/Bot 的请求，可在任意�
 
 [![Star History Chart](https://api.star-history.com/svg?repos=memohai/Memoh&type=date&legend=top-left)](https://www.star-history.com/#memohai/Memoh&type=date&legend=top-left)
 
+## Contributors
+
+<a href="https://github.com/memohai/Memoh/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=memohai/Memoh" />
+</a>
+
 ---
 
 **LICENSE**: AGPLv3
