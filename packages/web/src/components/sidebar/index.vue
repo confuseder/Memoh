@@ -72,7 +72,7 @@ const route = useRoute()
 const { t } = i18n.global
 const curSlider = ref()
 const curSelectSlide = (cur: string) => computed(() => {
-  return curSlider.value === cur || new RegExp(`^/main/${cur}$`).test(route.path)
+  return curSlider.value === cur || new RegExp(`^/${cur}$`).test(route.path)
 })
 const sidebarInfo = computed(() => [
   {
